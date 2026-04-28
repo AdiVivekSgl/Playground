@@ -1,9 +1,5 @@
 import frappe
 
-@frappe.whitelist()
-def hello():
-    return {"status": "ok", "message": "Playground API is live"}
-import frappe
 
 @frappe.whitelist()
 def create_leave_request(leave_type=None, from_date=None, to_date=None, half_day=0):
@@ -20,22 +16,24 @@ def create_leave_request(leave_type=None, from_date=None, to_date=None, half_day
         "Employee",
         {"user_id": user_email},
         ["name", "employee_name"],
-        as_dict=True
+        as_dict=True,
     )
 
     if not employee:
         frappe.throw(f"No Employee record linked to {user_email}. Please contact HR.")
 
-    leave_app = frappe.get_doc({
-        "doctype": "Leave Application",
-        "employee": employee.name,
-        "leave_type": leave_type,
-        "from_date": from_date,
-        "to_date": to_date,
-        "half_day": int(half_day),
-        "description": "Submitted via Raven HR Bot",
-        "status": "Open"
-    })
+    leave_app = frappe.get_doc(
+        {
+            "doctype": "Leave Application",
+            "employee": employee.name,
+            "leave_type": leave_type,
+            "from_date": from_date,
+            "to_date": to_date,
+            "half_day": int(half_day),
+            "description": "Submitted via Raven HR Bot",
+            "status": "Open",
+        }
+    )
 
     leave_app.insert(ignore_permissions=True)
     leave_app.submit()

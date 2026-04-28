@@ -1,0 +1,7 @@
+app_name = "playground"
+app_title = "Playground"
+app_publisher = "Your Name"
+app_description = "Custom API scripts for ERPNext"
+app_version = "0.0.1"
+app_email = "you@example.com"
+app_license = "MIT"

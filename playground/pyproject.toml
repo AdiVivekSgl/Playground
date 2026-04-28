@@ -1,9 +1,13 @@
 [project]
 name = "playground"
-version = "0.0.1"
+authors = [
+    { name = "Your Name", email = "you@example.com" },
+]
 description = "Custom API scripts for ERPNext"
 requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
 
 [build-system]
-requires = ["flit_core >=3.2.0,<4"]
+requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"

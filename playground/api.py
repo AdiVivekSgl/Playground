@@ -1,14 +1,13 @@
 import frappe
 
 @frappe.whitelist()
-def create_leave_request(leave_type="Casual Leave", from_date=None, to_date=None, half_day=0):
+def create_leave_request(leave_type="Casual Leave", from_date=None, to_date=None, half_day=0, **kwargs):
     
     to_date = to_date or from_date
 
     if not from_date:
         frappe.throw("Please provide the start date.")
 
-    # Fetch employee from session
     user_email = frappe.session.user
     employee = frappe.db.get_value(
         "Employee",
@@ -36,13 +35,13 @@ def create_leave_request(leave_type="Casual Leave", from_date=None, to_date=None
     })
 
     leave_app.insert(ignore_permissions=True)
-    leave_app.submit()
 
     return (
-        f"✅ Leave request *{leave_app.name}* submitted!\n\n"
+        f"✅ Leave request *{leave_app.name}* created!\n\n"
         f"👤 *Employee:* {employee.employee_name}\n"
         f"🏢 *Company:* {employee.company}\n"
         f"🏖️ *Leave Type:* {leave_type}\n"
         f"📅 *From:* {from_date}\n"
-        f"📅 *To:* {to_date}"
+        f"📅 *To:* {to_date}\n\n"
+        f"⏳ Your request is pending HR approval."
     )

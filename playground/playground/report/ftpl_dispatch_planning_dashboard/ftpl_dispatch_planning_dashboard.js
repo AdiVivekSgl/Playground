@@ -1,4 +1,4 @@
-frappe.query_reports["FTPL - Dispatch Planning Dashboard"] = {
+frappe.query_reports["FTPL Dispatch Planning Dashboard"] = {
     filters: [
         {
             fieldname: "company",

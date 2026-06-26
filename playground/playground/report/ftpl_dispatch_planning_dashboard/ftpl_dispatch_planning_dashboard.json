@@ -13,11 +13,11 @@
  "modified": "2026-06-26 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Playground",
- "name": "FTPL - Dispatch Planning Dashboard",
+ "name": "FTPL Dispatch Planning Dashboard",
  "owner": "Administrator",
  "prepared_report": 0,
  "ref_doctype": "Sales Order",
- "report_name": "FTPL - Dispatch Planning Dashboard",
+ "report_name": "FTPL Dispatch Planning Dashboard",
  "report_type": "Script Report",
  "roles": [
   {

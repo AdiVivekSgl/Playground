@@ -100,14 +100,16 @@ def get_sales_order_items(filters):
     if filters.get("item_group"):
         conditions.append("soi.item_group = %(item_group)s")
         values["item_group"] = filters.item_group
+    updated_delivery_date_expr = get_updated_delivery_date_expression()
+
     if filters.get("updated_delivery_date_from"):
-        conditions.append("soi.custom_updated_delivery_date >= %(delivery_from)s")
+        conditions.append(f"{updated_delivery_date_expr} >= %(delivery_from)s")
         values["delivery_from"] = filters.updated_delivery_date_from
     if filters.get("updated_delivery_date_to"):
-        conditions.append("soi.custom_updated_delivery_date <= %(delivery_to)s")
+        conditions.append(f"{updated_delivery_date_expr} <= %(delivery_to)s")
         values["delivery_to"] = filters.updated_delivery_date_to
     if filters.get("show_only_overdue"):
-        conditions.append("soi.custom_updated_delivery_date < %(today)s")
+        conditions.append(f"{updated_delivery_date_expr} < %(today)s")
         values["today"] = nowdate()
 
     return frappe.db.sql(
@@ -126,18 +128,35 @@ def get_sales_order_items(filters):
             soi.qty as ordered_qty,
             ifnull(soi.delivered_qty, 0) as delivered_qty,
             soi.rate,
-            soi.custom_updated_delivery_date as updated_delivery_date,
+            {updated_delivery_date_expr} as updated_delivery_date,
             group_concat(distinct st.sales_person order by st.idx separator ', ') as sales_person
         from `tabSales Order Item` soi
         inner join `tabSales Order` so on so.name = soi.parent
         left join `tabSales Team` st on st.parenttype = 'Sales Order' and st.parent = so.name
         where {' and '.join(conditions)}
         group by soi.name
-        order by soi.custom_updated_delivery_date asc, so.transaction_date asc, so.name asc, soi.idx asc
+        order by {updated_delivery_date_expr} asc, so.transaction_date asc, so.name asc, soi.idx asc
         """,
         values,
         as_dict=True,
     )
+
+
+def get_updated_delivery_date_expression():
+    """Return a safe SQL expression for the report's updated delivery date.
+
+    FTPL sites have historically added ``custom_updated_delivery_date`` either to
+    the Sales Order parent or, less commonly, to the Sales Order Item child.  The
+    report must not reference a missing custom column because MariaDB validates
+    every selected, filtered, and ordered column before returning any rows.
+    """
+    if frappe.db.has_column("Sales Order", "custom_updated_delivery_date"):
+        return "coalesce(so.custom_updated_delivery_date, so.delivery_date)"
+
+    if frappe.db.has_column("Sales Order Item", "custom_updated_delivery_date"):
+        return "coalesce(soi.custom_updated_delivery_date, so.delivery_date)"
+
+    return "so.delivery_date"
 
 
 def add_multiselect_condition(conditions, values, field, key, raw_value):

@@ -1,0 +1,37 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:BOM-REPLACE-.{YYYY}.-.{#####}",
+ "creation": "2026-06-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["old_item", "new_item", "company", "only_active_boms", "update_parent_boms", "update_draft_work_orders", "dry_run", "status", "replacement_details"],
+ "fields": [
+  {"fieldname": "old_item", "fieldtype": "Link", "in_list_view": 1, "label": "Old Item", "options": "Item", "reqd": 1},
+  {"fieldname": "new_item", "fieldtype": "Link", "in_list_view": 1, "label": "New Item", "options": "Item", "reqd": 1},
+  {"fieldname": "company", "fieldtype": "Link", "label": "Company", "options": "Company"},
+  {"default": "1", "fieldname": "only_active_boms", "fieldtype": "Check", "label": "Only Active BOMs"},
+  {"default": "1", "fieldname": "update_parent_boms", "fieldtype": "Check", "label": "Update Parent BOM References"},
+  {"default": "0", "fieldname": "update_draft_work_orders", "fieldtype": "Check", "label": "Update Existing Draft Work Orders"},
+  {"default": "1", "fieldname": "dry_run", "fieldtype": "Check", "label": "Dry Run"},
+  {"default": "Draft", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Draft\nPreview Generated\nProcessing\nCompleted\nFailed", "read_only": 1},
+  {"fieldname": "replacement_details", "fieldtype": "Table", "label": "Replacement Details", "options": "BOM Item Replacement Detail", "read_only": 1}
+ ],
+ "is_submittable": 0,
+ "links": [],
+ "modified": "2026-06-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Manufacturing",
+ "name": "BOM Item Replacement Tool",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Manufacturing Manager", "share": 1, "write": 1},
+  {"email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Manufacturing User", "share": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

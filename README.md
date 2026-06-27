@@ -1,2 +1,7 @@
 # Playground
-AVS on the go, learning git, frappe, raven and other customizations
+
+Custom API scripts for ERPNext.
+
+## Active API
+
+- `playground.api.create_leave_request`: whitelisted Frappe endpoint for creating leave requests from the current session user.

@@ -12,7 +12,7 @@ def create_leave_request(leave_type="Casual Leave", from_date=None, to_date=None
     employee = frappe.db.get_value(
         "Employee",
         {"user_id": user_email},
-        ["name", "employee_name", "company", "holiday_list"],
+        ["name", "employee_name", "company"],
         as_dict=True
     )
 
@@ -25,7 +25,7 @@ def create_leave_request(leave_type="Casual Leave", from_date=None, to_date=None
     leave_app = frappe.get_doc({
         "doctype": "Leave Application",
         "employee": employee.name,
-        "company": employee.company or "Frontier Technologies Pvt Ltd",
+        "company": employee.company or frappe.defaults.get_global_default("company"),
         "leave_type": leave_type,
         "from_date": from_date,
         "to_date": to_date,

@@ -166,8 +166,13 @@ class KitContentMapping(Document):
 
 		row.bom = bom_name
 		self.save()
-		self.reload()
-		row = self._get_row(row_name)
+		# `row` is still the same in-memory child object after save() — if it
+		# was a brand-new, not-yet-saved row (client-side temp name like
+		# "new-kit-content-mapping-item-xxxxx"), Frappe updates row.name to
+		# its real permanent name in place right here. We deliberately do
+		# NOT reload() or re-fetch by the old row_name: reload() discards
+		# this object and re-fetches fresh ones from the DB, and the
+		# original row_name argument is now stale and matches nothing.
 
 		bom_doc = frappe.get_doc("BOM", bom_name)
 		exploded = {d.item_code: d for d in bom_doc.exploded_items}

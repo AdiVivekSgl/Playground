@@ -182,8 +182,8 @@ class KitContentMapping(Document):
 			new_row.framework_node_type = "Purchase"
 			new_row.treatment = "Passthrough"
 			new_row.item_code = code
-			new_row.qty = d.qty
-			new_row.uom = d.uom
+			new_row.qty = d.stock_qty
+			new_row.uom = d.stock_uom
 			new_row.is_framework_extra = 1
 			new_row.bom_source_row = row.name
 			new_rows.append(new_row)

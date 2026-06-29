@@ -78,7 +78,7 @@
    "columns": 3,
    "depends_on": "eval:doc.treatment == 'Subassembly Existing' || doc.treatment == 'Subassembly New'",
    "mandatory_depends_on": "eval:doc.treatment == 'Subassembly Existing'",
-   "description": "Pick an existing BOM to reuse it (its raw materials get exploded and diffed against the framework) — filtered to BOMs for this row's Item Code. Leave blank on a Subassembly New row and use the \"Generate pending BOMs\" button to build one from this mapping's own children."
+   "description": "Pick an existing BOM to reuse it (its raw materials get exploded and diffed against the framework) — filtered to BOMs for this row's Item Code. Leave blank on a Subassembly New row and use the \"Generate BOMs\" button to build one from this mapping's own children."
   },
   {
    "fieldname": "is_framework_extra",

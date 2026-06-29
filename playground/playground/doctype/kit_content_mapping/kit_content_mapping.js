@@ -11,19 +11,19 @@ frappe.ui.form.on("Kit Content Mapping", {
 			};
 		});
 
-		frm.add_custom_button(__("Generate pending BOMs"), () => {
+		frm.add_custom_button(__("Generate BOMs"), () => {
 			frm.call({ method: "generate_pending_boms", doc: frm.doc }).then((r) => {
 				const created = r.message || [];
 				if (created.length) {
 					frappe.show_alert({
-						message: __("Created {0} BOM(s).", [created.length]),
+						message: __("Created {0} BOM(s), including the FG Item's.", [created.length]),
 						indicator: "green",
 					});
 					frm.reload_doc();
 				} else {
 					frappe.show_alert({
 						message: __(
-							"Nothing to generate — every Subassembly New row already has a BOM, or none are mapped yet."
+							"Nothing to generate — the FG Item already has a BOM and every Subassembly New row already has one too, or none are mapped yet."
 						),
 						indicator: "blue",
 					});

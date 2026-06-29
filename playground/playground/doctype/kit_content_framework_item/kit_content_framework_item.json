@@ -1,0 +1,39 @@
+{
+ "doctype": "DocType",
+ "name": "Kit Content Framework Item",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {
+   "fieldname": "node_name",
+   "fieldtype": "Data",
+   "label": "Node Name",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 3
+  },
+  {
+   "fieldname": "indent_level",
+   "fieldtype": "Int",
+   "label": "Indent Level",
+   "reqd": 1,
+   "default": "1",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "1 = top level under the Finished Good. A row's parent is the nearest row above it with one less Indent Level."
+  },
+  {
+   "fieldname": "node_type",
+   "fieldtype": "Select",
+   "label": "Node Type",
+   "options": "Purchase\nSubassembly\nPassthrough\nVariable",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  }
+ ],
+ "permissions": []
+}

@@ -1,0 +1,82 @@
+{
+ "doctype": "DocType",
+ "name": "Kit Content Mapping",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "Expression (old style)",
+ "autoname": "KCM-.#####",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "fields": [
+  {
+   "fieldname": "framework_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "kit_content_framework",
+   "fieldtype": "Link",
+   "label": "Kit Content Framework",
+   "options": "Kit Content Framework",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Loads the node structure into the table below."
+  },
+  {
+   "fieldname": "default_item_group",
+   "fieldtype": "Link",
+   "label": "Default Item Group For New Items",
+   "options": "Item Group",
+   "description": "Used to auto-create the Item record for any row whose Treatment is \"Subassembly New\"."
+  },
+  {
+   "fieldname": "default_stock_uom",
+   "fieldtype": "Link",
+   "label": "Default Stock UOM For New Items",
+   "options": "UOM"
+  },
+  {
+   "fieldname": "fg_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "fg_item",
+   "fieldtype": "Link",
+   "label": "FG Item",
+   "options": "Item",
+   "in_list_view": 1,
+   "description": "Tags this mapping to a Finished Good item."
+  },
+  {
+   "fieldname": "mapping_section",
+   "fieldtype": "Section Break",
+   "label": "Mapping Items"
+  },
+  {
+   "fieldname": "mapping_items",
+   "fieldtype": "Table",
+   "label": "Mapping Items",
+   "options": "Kit Content Mapping Item"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "role": "Manufacturing Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  }
+ ]
+}

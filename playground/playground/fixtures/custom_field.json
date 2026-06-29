@@ -1,0 +1,15 @@
+[
+ {
+  "doctype": "Custom Field",
+  "dt": "BOM Item",
+  "fieldname": "node",
+  "label": "Node",
+  "fieldtype": "Data",
+  "insert_after": "item_code",
+  "read_only": 0,
+  "in_list_view": 1,
+  "translatable": 0,
+  "allow_on_submit": 1,
+  "description": "Breadcrumb path of the Kit Content Framework node this component maps to, e.g. \"KWL Kit > HS Components > Core Tubings > Stress Control Tube\". Set automatically when this BOM is generated from a Kit Content Mapping. Implemented as Data rather than a Link to Kit Content Framework Item because Frappe's Link autocomplete does not reliably query child-table (istable) doctypes — list permissions and the search dialog assume a standalone list view that child doctypes don't have."
+ }
+]

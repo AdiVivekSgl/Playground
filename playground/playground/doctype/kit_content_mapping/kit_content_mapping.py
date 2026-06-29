@@ -223,7 +223,10 @@ class KitContentMapping(Document):
 			for r in self.mapping_items
 			if not (r.is_framework_extra and r.bom_source_row == row.name)
 		]
-		row = self._get_row(row_name)
+		# `row` is unaffected by the filter above (it's never an
+		# is_framework_extra row when this method runs) and its `.name` is
+		# already current from the save() above — no need to re-fetch it by
+		# the (possibly stale) row_name.
 
 		insert_pos = self.mapping_items.index(row) + 1
 		new_rows = []

@@ -217,36 +217,39 @@ class KitContentMapping(Document):
 		framework_codes = self._purchase_item_codes_under(row)
 		extra_codes = [code for code in exploded if code not in framework_codes]
 
-		# Drop any stale extras from a previously selected BOM on this same row.
-		self.mapping_items = [
-			r
-			for r in self.mapping_items
-			if not (r.is_framework_extra and r.bom_source_row == row.name)
-		]
-		# `row` is unaffected by the filter above (it's never an
-		# is_framework_extra row when this method runs) and its `.name` is
-		# already current from the save() above — no need to re-fetch it by
-		# the (possibly stale) row_name.
+		# Rebuild the whole child table in one pass — appending a plain dict
+		# per desired row, in the desired final order — rather than splicing
+		# Document objects into the existing list in place. This is the
+		# standard Frappe pattern for "recompute and replace a child table",
+		# and it sidesteps the class of bug that kept showing up when this
+		# method tried to manipulate self.mapping_items directly: rows that
+		# looked correctly inserted in memory just never persisted.
+		final_rows = []
+		for r in self._ordered_rows():
+			if r.is_framework_extra and r.bom_source_row == row.name:
+				continue  # drop stale extras from a previous BOM pick on this row
+			row_dict = r.as_dict()
+			row_dict.pop("idx", None)  # let append() assign sequential idx as we go
+			final_rows.append(row_dict)
+			if r.name == row.name:
+				for code in extra_codes:
+					d = exploded[code]
+					final_rows.append(
+						{
+							"node_name": d.item_name or code,
+							"indent_level": row.indent_level + 1,
+							"framework_node_type": "Purchase",
+							"treatment": "Other",
+							"item_code": code,
+							"qty": d.stock_qty,
+							"uom": d.stock_uom,
+							"is_framework_extra": 1,
+							"bom_source_row": row.name,
+						}
+					)
 
-		insert_pos = self.mapping_items.index(row) + 1
-		new_rows = []
-		for code in extra_codes:
-			d = exploded[code]
-			new_row = self.append("mapping_items", {})
-			new_row.node_name = d.item_name or code
-			new_row.indent_level = row.indent_level + 1
-			new_row.framework_node_type = "Purchase"
-			new_row.treatment = "Other"
-			new_row.item_code = code
-			new_row.qty = d.stock_qty
-			new_row.uom = d.stock_uom
-			new_row.is_framework_extra = 1
-			new_row.bom_source_row = row.name
-			new_rows.append(new_row)
-			self.mapping_items.remove(new_row)
-
-		self.mapping_items[insert_pos:insert_pos] = new_rows
-		for i, r in enumerate(self.mapping_items, start=1):
-			r.idx = i
+		self.set("mapping_items", [])
+		for row_dict in final_rows:
+			self.append("mapping_items", row_dict)
 		self.save()
 		return extra_codes

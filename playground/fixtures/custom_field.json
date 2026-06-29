@@ -1,6 +1,7 @@
 [
  {
   "doctype": "Custom Field",
+  "name": "BOM Item-node",
   "dt": "BOM Item",
   "fieldname": "node",
   "label": "Node",

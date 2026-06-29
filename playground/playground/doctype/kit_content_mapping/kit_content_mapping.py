@@ -154,6 +154,16 @@ class KitContentMapping(Document):
 	@frappe.whitelist()
 	def explode_bom_for_row(self, row_name, bom_name):
 		row = self._get_row(row_name)
+
+		bom_item = frappe.db.get_value("BOM", bom_name, "item")
+		if bom_item != row.item_code:
+			frappe.throw(
+				_(
+					"Row #{0} ({1}): {2} is a BOM for {3}, not {4}. Pick a BOM that "
+					"actually belongs to this row's Item Code."
+				).format(row.idx, row.node_name, bom_name, bom_item, row.item_code)
+			)
+
 		row.bom = bom_name
 		self.save()
 		self.reload()
@@ -180,7 +190,7 @@ class KitContentMapping(Document):
 			new_row.node_name = d.item_name or code
 			new_row.indent_level = row.indent_level + 1
 			new_row.framework_node_type = "Purchase"
-			new_row.treatment = "Passthrough"
+			new_row.treatment = "Other"
 			new_row.item_code = code
 			new_row.qty = d.stock_qty
 			new_row.uom = d.stock_uom

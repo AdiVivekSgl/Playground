@@ -1,5 +1,16 @@
 frappe.ui.form.on("Kit Content Mapping", {
 	refresh(frm) {
+		frm.set_query("bom", "mapping_items", (doc, cdt, cdn) => {
+			const row = locals[cdt][cdn];
+			return {
+				filters: {
+					item: row.item_code,
+					is_active: 1,
+					docstatus: 1,
+				},
+			};
+		});
+
 		frm.add_custom_button(__("Generate pending BOMs"), () => {
 			frm.call({ method: "generate_pending_boms", doc: frm.doc }).then((r) => {
 				const created = r.message || [];
@@ -67,18 +78,24 @@ frappe.ui.form.on("Kit Content Mapping Item", {
 			method: "explode_bom_for_row",
 			doc: frm.doc,
 			args: { row_name: row.name, bom_name: row.bom },
-		}).then((r) => {
-			const extra = r.message || [];
-			if (extra.length) {
-				frappe.show_alert({
-					message: __(
-						"{0} component(s) in that BOM aren't in the framework — added below, flagged \"Not In Framework\", recorded on this mapping only.",
-						[extra.length]
-					),
-					indicator: "orange",
-				});
-			}
-			frm.reload_doc();
-		});
+		})
+			.then((r) => {
+				const extra = r.message || [];
+				if (extra.length) {
+					frappe.show_alert({
+						message: __(
+							"{0} component(s) in that BOM aren't in the framework — added below, flagged \"Other\", recorded on this mapping only.",
+							[extra.length]
+						),
+						indicator: "orange",
+					});
+				}
+				frm.reload_doc();
+			})
+			.catch(() => {
+				// Server rejected it (e.g. BOM doesn't belong to this row's item) —
+				// don't leave the field showing a selection that was never saved.
+				frappe.model.set_value(cdt, cdn, "bom", "");
+			});
 	},
 });

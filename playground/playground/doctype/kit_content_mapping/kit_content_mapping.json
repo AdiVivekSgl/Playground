@@ -52,6 +52,14 @@
    "description": "Tags this mapping to a Finished Good item."
   },
   {
+   "fieldname": "fg_bom",
+   "fieldtype": "Link",
+   "label": "FG BOM",
+   "options": "BOM",
+   "read_only": 1,
+   "description": "Generated automatically by \"Generate BOMs\" — the top-level BOM for the FG Item, built from this mapping's level-1 rows (with Passthrough rows promoted to their nearest real descendants)."
+  },
+  {
    "fieldname": "mapping_section",
    "fieldtype": "Section Break",
    "label": "Mapping Items"

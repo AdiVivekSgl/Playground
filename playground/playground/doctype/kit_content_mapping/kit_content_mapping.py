@@ -241,46 +241,8 @@ class KitContentMapping(Document):
 						}
 					)
 
-		frappe.log_error(
-			title="KCM debug 1: pre-rebuild",
-			message=frappe.as_json(
-				{
-					"row_name_arg": row_name,
-					"row_name_after_first_save": row.name,
-					"extra_codes": extra_codes,
-					"final_rows_count": len(final_rows),
-					"final_rows_names": [d.get("name", "<new>") for d in final_rows],
-					"mapping_items_count_before_rebuild": len(self.mapping_items),
-				}
-			),
-		)
-
 		self.set("mapping_items", [])
 		for row_dict in final_rows:
 			self.append("mapping_items", row_dict)
-
-		frappe.log_error(
-			title="KCM debug 2: post-append, pre-save",
-			message=frappe.as_json(
-				{
-					"mapping_items_count_after_rebuild": len(self.mapping_items),
-					"names": [getattr(r, "name", "<none>") for r in self.mapping_items],
-				}
-			),
-		)
-
 		self.save()
-
-		frappe.log_error(
-			title="KCM debug 3: post-save",
-			message=frappe.as_json(
-				{
-					"db_count_for_this_parent": frappe.db.count(
-						"Kit Content Mapping Item",
-						{"parent": self.name, "parentfield": "mapping_items"},
-					),
-				}
-			),
-		)
-
 		return extra_codes

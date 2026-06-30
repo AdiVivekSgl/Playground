@@ -56,6 +56,21 @@ frappe.ui.form.on("Kit Content Mapping", {
 				]),
 				indicator: "blue",
 			});
+
+			// Rows just loaded are mostly blank (item_code, bom) — a normal
+			// save would fail mandatory validation on nearly every row. This
+			// relaxed save just gets the document a real name immediately;
+			// the ordinary Save button still enforces every mandatory field
+			// the regular way once the user actually fills the rows in.
+			frm.call({ method: "save_relaxed", doc: frm.doc }).then((r) => {
+				if (r.message && r.message !== frm.doc.name) {
+					// Navigate explicitly rather than frm.reload_doc() — we've
+					// already hit a case where reloading right after a
+					// same-request rename used a name the form hadn't
+					// picked up yet. A route change always loads correctly.
+					frappe.set_route("Form", "Kit Content Mapping", r.message);
+				}
+			});
 		});
 	},
 });

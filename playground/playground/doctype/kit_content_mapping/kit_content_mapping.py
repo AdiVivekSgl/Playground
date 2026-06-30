@@ -217,13 +217,6 @@ class KitContentMapping(Document):
 		framework_codes = self._purchase_item_codes_under(row)
 		extra_codes = [code for code in exploded if code not in framework_codes]
 
-		# Rebuild the whole child table in one pass — appending a plain dict
-		# per desired row, in the desired final order — rather than splicing
-		# Document objects into the existing list in place. This is the
-		# standard Frappe pattern for "recompute and replace a child table",
-		# and it sidesteps the class of bug that kept showing up when this
-		# method tried to manipulate self.mapping_items directly: rows that
-		# looked correctly inserted in memory just never persisted.
 		final_rows = []
 		for r in self._ordered_rows():
 			if r.is_framework_extra and r.bom_source_row == row.name:
@@ -248,8 +241,46 @@ class KitContentMapping(Document):
 						}
 					)
 
+		frappe.log_error(
+			title="KCM debug 1: pre-rebuild",
+			message=frappe.as_json(
+				{
+					"row_name_arg": row_name,
+					"row_name_after_first_save": row.name,
+					"extra_codes": extra_codes,
+					"final_rows_count": len(final_rows),
+					"final_rows_names": [d.get("name", "<new>") for d in final_rows],
+					"mapping_items_count_before_rebuild": len(self.mapping_items),
+				}
+			),
+		)
+
 		self.set("mapping_items", [])
 		for row_dict in final_rows:
 			self.append("mapping_items", row_dict)
+
+		frappe.log_error(
+			title="KCM debug 2: post-append, pre-save",
+			message=frappe.as_json(
+				{
+					"mapping_items_count_after_rebuild": len(self.mapping_items),
+					"names": [getattr(r, "name", "<none>") for r in self.mapping_items],
+				}
+			),
+		)
+
 		self.save()
+
+		frappe.log_error(
+			title="KCM debug 3: post-save",
+			message=frappe.as_json(
+				{
+					"db_count_for_this_parent": frappe.db.count(
+						"Kit Content Mapping Item",
+						{"parent": self.name, "parentfield": "mapping_items"},
+					),
+				}
+			),
+		)
+
 		return extra_codes

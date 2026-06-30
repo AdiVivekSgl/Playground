@@ -101,7 +101,15 @@ class KitContentMapping(Document):
 	def _purchase_item_codes_under(self, target_row):
 		"""All Purchase-level item codes anywhere in target_row's subtree —
 		used as the comparison set when diffing an existing BOM's full
-		explosion against what the framework expects."""
+		explosion against what the framework expects.
+
+		Deliberately excludes is_framework_extra rows: those are "Other"
+		rows injected by a PREVIOUS BOM selection on this same row, tagged
+		framework_node_type="Purchase" purely so they display like an
+		ordinary purchase row. If they counted toward this baseline, a
+		second BOM pick on the same row would compare the new BOM against
+		a baseline polluted with the old BOM's leftovers, instead of
+		against what the framework template actually defines."""
 		rows = self._ordered_rows()
 		idx = rows.index(target_row)
 		level = target_row.indent_level
@@ -109,6 +117,8 @@ class KitContentMapping(Document):
 		for row in rows[idx + 1 :]:
 			if row.indent_level <= level:
 				break
+			if row.is_framework_extra:
+				continue
 			if row.framework_node_type == "Purchase" and row.item_code:
 				codes.add(row.item_code)
 		return codes

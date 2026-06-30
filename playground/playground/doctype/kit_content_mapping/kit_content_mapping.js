@@ -1,3 +1,35 @@
+function show_explosion_dialog(title, lines) {
+	if (!lines.length) {
+		frappe.msgprint(
+			__("Nothing to preview yet — map at least one top-level row with an item code first.")
+		);
+		return;
+	}
+	const rows_html = lines
+		.map(
+			(l) => `
+			<tr>
+				<td>${frappe.utils.escape_html(l.node || "")}</td>
+				<td>${frappe.utils.escape_html(l.item_code || "")}</td>
+				<td style="text-align:right">${l.qty}</td>
+				<td>${frappe.utils.escape_html(l.uom || "")}</td>
+			</tr>`
+		)
+		.join("");
+	const html = `
+		<table class="table table-bordered" style="font-size:12px;">
+			<thead>
+				<tr><th>Node</th><th>Item Code</th><th style="text-align:right">Qty</th><th>UOM</th></tr>
+			</thead>
+			<tbody>${rows_html}</tbody>
+		</table>`;
+	new frappe.ui.Dialog({
+		title: title,
+		size: "large",
+		fields: [{ fieldtype: "HTML", options: html }],
+	}).show();
+}
+
 frappe.ui.form.on("Kit Content Mapping", {
 	refresh(frm) {
 		frm.set_query("bom", "mapping_items", (doc, cdt, cdn) => {
@@ -16,17 +48,50 @@ frappe.ui.form.on("Kit Content Mapping", {
 				const created = r.message || [];
 				if (created.length) {
 					frappe.show_alert({
-						message: __("Created {0} BOM(s), including the FG Item's.", [created.length]),
+						message: __(
+							"Created {0} BOM(s) — including the FG Item's full level set (L1 default, plus alternates) where applicable.",
+							[created.length]
+						),
 						indicator: "green",
 					});
 					frm.reload_doc();
 				} else {
 					frappe.show_alert({
 						message: __(
-							"Nothing to generate — the FG Item already has a BOM and every Subassembly New row already has one too, or none are mapped yet."
+							"Nothing to generate — the FG Item's BOM set already exists and every Subassembly New row already has one too, or none are mapped yet."
 						),
 						indicator: "blue",
 					});
+				}
+			});
+		});
+
+		frm.add_custom_button(__("Preview Fully Exploded FG BOM"), () => {
+			frm.call({ method: "preview_fully_exploded_fg_bom", doc: frm.doc }).then((r) => {
+				show_explosion_dialog(
+					__("Fully Exploded FG BOM — Preview (nothing saved)"),
+					r.message || []
+				);
+			});
+		});
+
+		frm.add_custom_button(__("Preview Custom Exploded BOM"), () => {
+			frm.call({ method: "preview_custom_exploded_fg_bom", doc: frm.doc }).then((r) => {
+				show_explosion_dialog(
+					__("Custom Exploded FG BOM — Preview (nothing saved)"),
+					r.message || []
+				);
+			});
+		});
+
+		frm.add_custom_button(__("Generate Custom Exploded BOM"), () => {
+			frm.call({ method: "generate_custom_exploded_bom", doc: frm.doc }).then((r) => {
+				if (r.message) {
+					frappe.show_alert({
+						message: __("Created Custom Exploded BOM: {0}", [r.message]),
+						indicator: "green",
+					});
+					frm.reload_doc();
 				}
 			});
 		});

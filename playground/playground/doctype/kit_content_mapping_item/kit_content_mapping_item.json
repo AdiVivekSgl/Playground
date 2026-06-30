@@ -93,6 +93,16 @@
    "description": "Unlocks Type / Treatment / Item Code / Qty on this row's \"Other\" components (the rows added by exploding the selected BOM above) so they can be edited or even turned into their own Subassembly Existing/New rows. One-way: once checked, this box locks itself — there's no unchecking it back. Edits only take effect on the BOM once you click \"Generate BOMs\", which builds a new BOM in parallel and repoints this row's BOM field to it."
   },
   {
+   "fieldname": "keep_aggregated",
+   "fieldtype": "Check",
+   "label": "Keep Aggregated (Custom Explosion)",
+   "default": "0",
+   "in_list_view": 1,
+   "columns": 1,
+   "depends_on": "eval:doc.framework_node_type == 'Subassembly'",
+   "description": "Used only by the \"Custom Exploded BOM\" preview/generate actions. Default (unchecked) is explode — checking this keeps THIS row as a single aggregated line instead of breaking it down further, regardless of what other branches in the tree are doing. e.g. check this on a vendor-supplied kit you don't want broken into its own raw materials, while everything else explodes fully."
+  },
+  {
    "fieldname": "is_framework_extra",
    "fieldtype": "Check",
    "label": "Not In Framework",

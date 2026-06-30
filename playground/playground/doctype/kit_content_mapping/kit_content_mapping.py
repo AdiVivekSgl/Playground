@@ -253,7 +253,11 @@ class KitContentMapping(Document):
 					d = exploded[code]
 					final_rows.append(
 						{
-							"node_name": d.item_name or code,
+							# Reflect the PARENT (the Subassembly Existing row whose BOM
+						# was exploded), not the exploded child's own name — the Item
+						# Code column already shows the child; the Node column is more
+						# useful telling you which subassembly this extra came from.
+						"node_name": row.node_name,
 							"indent_level": row.indent_level + 1,
 							"framework_node_type": "Purchase",
 							"treatment": "Other",

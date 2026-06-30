@@ -76,6 +76,21 @@ frappe.ui.form.on("Kit Content Mapping", {
 });
 
 frappe.ui.form.on("Kit Content Mapping Item", {
+	unlock_components(frm, cdt, cdn) {
+		const row = locals[cdt][cdn];
+		if (!row.unlock_components) return;
+		// Unlock this row's own "Other" children (the rows added when its BOM
+		// was selected) so Type / Treatment / Item Code / Qty become editable.
+		// This checkbox locks itself once checked (read_only_depends_on on the
+		// field) — there's no path back to the locked state.
+		(frm.doc.mapping_items || []).forEach((child) => {
+			if (child.is_framework_extra && child.bom_source_row === row.name) {
+				frappe.model.set_value(child.doctype, child.name, "is_editable", 1);
+			}
+		});
+		frm.refresh_field("mapping_items");
+	},
+
 	treatment(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
 		// Passthrough never carries an item or BOM, regardless of what the row held before.
@@ -88,7 +103,14 @@ frappe.ui.form.on("Kit Content Mapping Item", {
 
 	bom(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
-		if (!row.bom || row.is_framework_extra) return;
+		if (!row.bom) return;
+		// Ordinary extra ("Other") rows never get a bom picked on them directly
+		// — but once unlocked via the parent's "Allow Editing Components"
+		// checkbox, a user can retype Treatment to Subassembly Existing/New on
+		// one of them, at which point it needs to behave exactly like any
+		// other Subassembly Existing row, including triggering its own
+		// explode-and-diff recursively.
+		if (row.is_framework_extra && !row.is_editable) return;
 
 		// explode_bom_for_row does a self.save() server-side. If this Mapping
 		// document has never been saved before, that save is actually the

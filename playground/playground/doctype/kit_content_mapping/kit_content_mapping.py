@@ -164,14 +164,37 @@ class KitContentMapping(Document):
 				bom_name = self._generate_bom_for_row(rows, row)
 				row.bom = bom_name
 				created.append(bom_name)
+
+		for row in rows:
+			# Rows whose components were unlocked (and presumably edited) get a
+			# FRESH BOM every time this button is clicked, regardless of
+			# whether they already have one — that's deliberate: this is the
+			# user's explicit "materialize my edits" action, not a one-shot
+			# fill-in-the-blank like Subassembly New above. The originally
+			# selected BOM is never touched; this just creates a new one in
+			# parallel and repoints `bom` to it, marked as the new default
+			# for this Item. Clicking again after further edits creates
+			# another new BOM superseding this one — the previous generated
+			# BOM isn't deleted, just no longer referenced or default.
+			if (
+				row.treatment == "Subassembly Existing"
+				and getattr(row, "unlock_components", 0)
+				and row.item_code
+			):
+				bom_name = self._generate_bom_for_row(rows, row, is_default=True)
+				row.bom = bom_name
+				created.append(bom_name)
+
 		if created:
 			self.save()
 		return created
 
-	def _build_bom(self, bom_item, components, rows):
+	def _build_bom(self, bom_item, components, rows, is_default=False):
 		bom = frappe.new_doc("BOM")
 		bom.item = bom_item
 		bom.quantity = 1
+		if is_default:
+			bom.is_default = 1
 		for component in components:
 			if not component.item_code:
 				frappe.throw(
@@ -192,7 +215,7 @@ class KitContentMapping(Document):
 		bom.insert()
 		return bom.name
 
-	def _generate_bom_for_row(self, rows, target_row):
+	def _generate_bom_for_row(self, rows, target_row, is_default=False):
 		components = self._resolve_components(rows, target_row)
 		if not components:
 			frappe.throw(
@@ -201,7 +224,7 @@ class KitContentMapping(Document):
 					"child rows (item code + qty) before generating its BOM."
 				).format(target_row.idx, target_row.node_name)
 			)
-		return self._build_bom(target_row.item_code, components, rows)
+		return self._build_bom(target_row.item_code, components, rows, is_default=is_default)
 
 	def _generate_fg_bom(self, rows):
 		components = self._resolve_root_components(rows)

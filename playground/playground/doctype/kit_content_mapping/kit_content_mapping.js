@@ -74,6 +74,27 @@ frappe.ui.form.on("Kit Content Mapping Item", {
 	bom(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
 		if (!row.bom || row.is_framework_extra) return;
+
+		// explode_bom_for_row does a self.save() server-side. If this Mapping
+		// document has never been saved before, that save is actually the
+		// document's first insert — Frappe assigns it its real permanent name
+		// at that moment. The form in the browser doesn't know about that
+		// rename, so frm.reload_doc() afterward tries to fetch the OLD
+		// (now nonexistent) placeholder name and silently does nothing —
+		// the rows really do get saved, but the page never shows them.
+		// Simplest reliable fix: require an explicit save first.
+		if (frm.is_new()) {
+			frappe.model.set_value(cdt, cdn, "bom", "");
+			frappe.msgprint({
+				title: __("Save first"),
+				message: __(
+					"Please save this Kit Content Mapping before selecting a BOM — picking a BOM on an unsaved document can save it under a new name the form doesn't know about yet, so nothing reloads correctly."
+				),
+				indicator: "orange",
+			});
+			return;
+		}
+
 		frm.call({
 			method: "explode_bom_for_row",
 			doc: frm.doc,

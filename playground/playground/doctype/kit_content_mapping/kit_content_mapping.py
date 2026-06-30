@@ -9,6 +9,20 @@ class KitContentMapping(Document):
 		# here already exists by the time the item_code Link field is checked.
 		self._auto_create_new_items()
 
+	@frappe.whitelist()
+	def save_relaxed(self):
+		"""Save while ignoring mandatory-field validation on rows the user
+		hasn't filled in yet (item_code, bom). Used right after loading or
+		reloading mapping_items from a Kit Content Framework, so the
+		document gets — or keeps — a real saved name immediately, instead
+		of leaving the user stuck on an unsaved draft until every single
+		row is filled in. This flag only affects this one in-memory save;
+		the ordinary Save button still enforces every mandatory field as
+		normal, since a fresh Document instance is loaded for that."""
+		self.flags.ignore_mandatory = True
+		self.save()
+		return self.name
+
 	# ------------------------------------------------------------------ #
 	# Subassembly New -> auto-create the Item (BOM is a separate step)
 	# ------------------------------------------------------------------ #
@@ -87,7 +101,15 @@ class KitContentMapping(Document):
 	def _purchase_item_codes_under(self, target_row):
 		"""All Purchase-level item codes anywhere in target_row's subtree —
 		used as the comparison set when diffing an existing BOM's full
-		explosion against what the framework expects."""
+		explosion against what the framework expects.
+
+		Deliberately excludes is_framework_extra rows: those are "Other"
+		rows injected by a PREVIOUS BOM selection on this same row, tagged
+		framework_node_type="Purchase" purely so they display like an
+		ordinary purchase row. If they counted toward this baseline, a
+		second BOM pick on the same row would compare the new BOM against
+		a baseline polluted with the old BOM's leftovers, instead of
+		against what the framework template actually defines."""
 		rows = self._ordered_rows()
 		idx = rows.index(target_row)
 		level = target_row.indent_level
@@ -95,6 +117,8 @@ class KitContentMapping(Document):
 		for row in rows[idx + 1 :]:
 			if row.indent_level <= level:
 				break
+			if row.is_framework_extra:
+				continue
 			if row.framework_node_type == "Purchase" and row.item_code:
 				codes.add(row.item_code)
 		return codes

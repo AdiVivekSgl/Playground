@@ -9,6 +9,20 @@ class KitContentMapping(Document):
 		# here already exists by the time the item_code Link field is checked.
 		self._auto_create_new_items()
 
+	@frappe.whitelist()
+	def save_relaxed(self):
+		"""Save while ignoring mandatory-field validation on rows the user
+		hasn't filled in yet (item_code, bom). Used right after loading or
+		reloading mapping_items from a Kit Content Framework, so the
+		document gets — or keeps — a real saved name immediately, instead
+		of leaving the user stuck on an unsaved draft until every single
+		row is filled in. This flag only affects this one in-memory save;
+		the ordinary Save button still enforces every mandatory field as
+		normal, since a fresh Document instance is loaded for that."""
+		self.flags.ignore_mandatory = True
+		self.save()
+		return self.name
+
 	# ------------------------------------------------------------------ #
 	# Subassembly New -> auto-create the Item (BOM is a separate step)
 	# ------------------------------------------------------------------ #

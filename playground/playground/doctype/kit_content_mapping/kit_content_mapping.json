@@ -57,7 +57,15 @@
    "label": "FG BOM",
    "options": "BOM",
    "read_only": 1,
-   "description": "Generated automatically by \"Generate BOMs\" — the top-level BOM for the FG Item, built from this mapping's level-1 rows (with Passthrough rows promoted to their nearest real descendants)."
+   "description": "Generated automatically by \"Generate BOMs\" — the top-level (L1) BOM for the FG Item, built from this mapping's level-1 rows (with Passthrough rows promoted to their nearest real descendants). This is the one marked as the Item's default BOM; the alternate levels below it (L2, L3, ... Fully Exploded) are reference BOMs only and are never marked default."
+  },
+  {
+   "fieldname": "generated_boms",
+   "fieldtype": "Table",
+   "label": "Generated Alternate-Level BOMs",
+   "options": "Kit Content Mapping Generated BOM",
+   "read_only": 1,
+   "description": "L2 through Fully Exploded, generated alongside the FG BOM (L1) above by \"Generate BOMs\". Reference/alternate BOMs only — none of these are marked as the Item's default."
   },
   {
    "fieldname": "mapping_section",

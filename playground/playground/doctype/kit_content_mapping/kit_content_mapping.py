@@ -159,6 +159,21 @@ class KitContentMapping(Document):
 			self.fg_bom = fg_bom_name
 			created.append(fg_bom_name)
 
+			# Build the rest of the level set (L2 ... L(max_depth-1), then
+			# Fully Exploded) in this SAME one-shot pass. Gated behind the
+			# same `not self.fg_bom` check above — once fg_bom exists, this
+			# whole block (L1 included) is skipped on future clicks.
+			indent_levels = [r.indent_level for r in rows if r.indent_level]
+			max_level = max(indent_levels) if indent_levels else 1
+			# L(max_level) would, by construction, already be fully exploded
+			# (nothing in the tree goes deeper), so the partial levels only
+			# run up to max_level - 1; Fully Exploded covers that last step.
+			for level in range(2, max_level):
+				level_bom_name = self._generate_level_bom(rows, level, "L{0}".format(level))
+				created.append(level_bom_name)
+			fully_exploded_name = self._generate_level_bom(rows, None, "Fully Exploded")
+			created.append(fully_exploded_name)
+
 		for row in rows:
 			if row.treatment == "Subassembly New" and row.item_code and not row.bom:
 				bom_name = self._generate_bom_for_row(rows, row)
@@ -189,13 +204,18 @@ class KitContentMapping(Document):
 			self.save()
 		return created
 
-	def _build_bom(self, bom_item, components, rows, is_default=False):
+	def _build_bom(self, bom_item, component_qty_pairs, rows, is_default=False):
+		"""`component_qty_pairs` is a list of (row, qty) tuples. qty is the
+		EFFECTIVE quantity for this specific BOM — for a normal single-level
+		build that's just the row's own qty; for a depth-bounded or fully
+		exploded build it's already been multiplied through every collapsed
+		level above it (see _explode_to_depth)."""
 		bom = frappe.new_doc("BOM")
 		bom.item = bom_item
 		bom.quantity = 1
 		if is_default:
 			bom.is_default = 1
-		for component in components:
+		for component, qty in component_qty_pairs:
 			if not component.item_code:
 				frappe.throw(
 					_(
@@ -207,7 +227,7 @@ class KitContentMapping(Document):
 				"items",
 				{
 					"item_code": component.item_code,
-					"qty": component.qty or 1,
+					"qty": qty or 1,
 					"uom": uom,
 					"node": self._node_path(rows, component),
 				},
@@ -224,13 +244,147 @@ class KitContentMapping(Document):
 					"child rows (item code + qty) before generating its BOM."
 				).format(target_row.idx, target_row.node_name)
 			)
-		return self._build_bom(target_row.item_code, components, rows, is_default=is_default)
+		pairs = [(c, c.qty or 1) for c in components]
+		return self._build_bom(target_row.item_code, pairs, rows, is_default=is_default)
 
 	def _generate_fg_bom(self, rows):
 		components = self._resolve_root_components(rows)
 		if not components:
 			frappe.throw(_("No top-level mapping rows found to build the FG Item's BOM."))
-		return self._build_bom(self.fg_item, components, rows)
+		pairs = [(c, c.qty or 1) for c in components]
+		# is_default=True: this is "L1", the one BOM of the generated set that
+		# should actually be the Item's default for work orders/costing — the
+		# L2...Ln and Fully Exploded variants below are alternates only.
+		return self._build_bom(self.fg_item, pairs, rows, is_default=True)
+
+	def _explode_to_depth(self, rows, max_depth):
+		"""Walk the FG root's tree, multiplying quantities through each
+		collapsed level. A Subassembly node becomes a line (not recursed
+		into further) once max_depth is reached; max_depth=None means never
+		stop early — recurse all the way to true leaves (Fully Exploded).
+		Returns a list of (row, effective_qty) tuples, ready to hand
+		straight to _build_bom."""
+		lines = []
+
+		def walk(component, multiplier, depth):
+			qty = (component.qty or 1) * multiplier
+			is_leaf_type = component.framework_node_type != "Subassembly"
+			if is_leaf_type or (max_depth is not None and depth >= max_depth):
+				lines.append((component, qty))
+				return
+			children = self._resolve_components(rows, component)
+			if not children:
+				frappe.throw(
+					_(
+						"Row #{0} ({1}) has no mapped child rows, so it can't "
+						"be exploded further for this BOM level. Map its "
+						"children first, or this branch can't go deeper than "
+						"where it currently stops."
+					).format(component.idx, component.node_name)
+				)
+			for child in children:
+				walk(child, qty, depth + 1)
+
+		for root_child in self._resolve_root_components(rows):
+			walk(root_child, 1, 1)
+
+		return lines
+
+	def _generate_level_bom(self, rows, max_depth, label):
+		lines = self._explode_to_depth(rows, max_depth)
+		bom_name = self._build_bom(self.fg_item, lines, rows, is_default=False)
+		self.append("generated_boms", {"level_label": label, "bom": bom_name})
+		return bom_name
+
+	@frappe.whitelist()
+	def preview_fully_exploded_fg_bom(self):
+		"""Read-only: computes the same Fully Exploded line list that
+		Generate BOMs would persist, but never saves or inserts anything —
+		safe to call any time, even before Generate BOMs has ever been
+		clicked, purely to sanity-check the tree."""
+		if not self.fg_item:
+			frappe.throw(_("Set an FG Item before previewing its BOM."))
+		rows = self._ordered_rows()
+		lines = self._explode_to_depth(rows, None)
+		return [
+			{
+				"node": self._node_path(rows, component),
+				"item_code": component.item_code,
+				"qty": qty,
+				"uom": component.uom
+				or frappe.db.get_value("Item", component.item_code, "stock_uom"),
+			}
+			for component, qty in lines
+		]
+
+	def _explode_selective(self, rows):
+		"""Like _explode_to_depth, but the stopping rule isn't a uniform
+		depth count — each Subassembly row decides for ITSELF whether it
+		stays aggregated (its `keep_aggregated` checkbox) or gets exploded
+		further. Different branches can stop at completely different
+		points: a vendor-supplied kit can stay a single line while
+		everything else in the same tree explodes all the way to raw
+		materials. Default (unchecked) is "explode" — you opt specific
+		nodes OUT, rather than opting branches in."""
+		lines = []
+
+		def walk(component, multiplier):
+			qty = (component.qty or 1) * multiplier
+			is_leaf_type = component.framework_node_type != "Subassembly"
+			if is_leaf_type or getattr(component, "keep_aggregated", 0):
+				lines.append((component, qty))
+				return
+			children = self._resolve_components(rows, component)
+			if not children:
+				frappe.throw(
+					_(
+						"Row #{0} ({1}) has no mapped child rows, so it can't "
+						"be exploded further. Map its children, or check "
+						"\"Keep Aggregated\" on this row instead."
+					).format(component.idx, component.node_name)
+				)
+			for child in children:
+				walk(child, qty)
+
+		for root_child in self._resolve_root_components(rows):
+			walk(root_child, 1)
+
+		return lines
+
+	@frappe.whitelist()
+	def preview_custom_exploded_fg_bom(self):
+		"""Read-only counterpart to preview_fully_exploded_fg_bom, but using
+		the per-node keep_aggregated selections instead of a uniform depth."""
+		if not self.fg_item:
+			frappe.throw(_("Set an FG Item before previewing its BOM."))
+		rows = self._ordered_rows()
+		lines = self._explode_selective(rows)
+		return [
+			{
+				"node": self._node_path(rows, component),
+				"item_code": component.item_code,
+				"qty": qty,
+				"uom": component.uom
+				or frappe.db.get_value("Item", component.item_code, "stock_uom"),
+			}
+			for component, qty in lines
+		]
+
+	@frappe.whitelist()
+	def generate_custom_exploded_bom(self):
+		"""Unlike the L1...Fully Exploded set, this always regenerates on
+		every click rather than one-shot — the whole point is to reflect
+		whatever the current keep_aggregated checkboxes say right now, and
+		that can change at any time. Never marked default; tracked in
+		generated_boms like the other alternates, labeled "Custom"."""
+		if not self.fg_item:
+			frappe.throw(_("Set an FG Item before generating its BOM."))
+		rows = self._ordered_rows()
+		lines = self._explode_selective(rows)
+		bom_name = self._build_bom(self.fg_item, lines, rows, is_default=False)
+		self.append("generated_boms", {"level_label": "Custom", "bom": bom_name})
+		self.save()
+		return bom_name
 
 	# ------------------------------------------------------------------ #
 	# Existing BOM selected -> explode fully, diff against the framework,

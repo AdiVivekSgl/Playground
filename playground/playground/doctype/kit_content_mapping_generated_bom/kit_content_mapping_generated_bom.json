@@ -1,0 +1,30 @@
+{
+ "doctype": "DocType",
+ "name": "Kit Content Mapping Generated BOM",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {
+   "fieldname": "level_label",
+   "fieldtype": "Data",
+   "label": "Level",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "e.g. \"L2\", \"L3\", \"Fully Exploded\". L1 is tracked separately on the parent's FG BOM field, since it's the one marked default."
+  },
+  {
+   "fieldname": "bom",
+   "fieldtype": "Link",
+   "label": "BOM",
+   "options": "BOM",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 4
+  }
+ ],
+ "permissions": []
+}

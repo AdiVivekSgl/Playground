@@ -112,6 +112,9 @@ frappe.ui.form.on("Kit Content Mapping", {
 						: fi.node_type === "Subassembly"
 						? "Subassembly Existing"
 						: "";
+				// Copy keep_aggregated from the framework row as a starting default
+				// — the user can override it freely in the mapping from here on.
+				row.keep_aggregated = fi.keep_aggregated || 0;
 			});
 			frm.refresh_field("mapping_items");
 			frappe.show_alert({

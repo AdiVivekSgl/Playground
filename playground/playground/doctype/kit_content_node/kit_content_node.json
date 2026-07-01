@@ -1,0 +1,51 @@
+{
+ "doctype": "DocType",
+ "name": "Kit Content Node",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "By fieldname",
+ "autoname": "field:node_name",
+ "title_field": "node_name",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "node_name",
+ "sort_order": "ASC",
+ "fields": [
+  {
+   "fieldname": "node_name",
+   "fieldtype": "Data",
+   "label": "Node Name",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "The canonical name for this BOM node — e.g. \"Connector\", \"Core Tubings\", \"HKX\". Used as the Link value in Kit Content Framework and Kit Content Mapping Item rows, and written to BOM Item.node when BOMs are generated."
+  },
+  {
+   "fieldname": "keep_aggregated",
+   "fieldtype": "Check",
+   "label": "Keep Aggregated By Default",
+   "default": "0",
+   "in_list_view": 1,
+   "description": "Default value for the \"Keep Aggregated (Custom Explosion)\" checkbox when this node is loaded into a Kit Content Framework row. Overridable at the framework level and again at the mapping level — this is only a starting default, not a live constraint."
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "role": "Manufacturing Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  }
+ ]
+}

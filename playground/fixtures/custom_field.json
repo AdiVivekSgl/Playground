@@ -5,12 +5,25 @@
   "dt": "BOM Item",
   "fieldname": "node",
   "label": "Node",
-  "fieldtype": "Data",
+  "fieldtype": "Link",
+  "options": "Kit Content Node",
   "insert_after": "item_code",
   "read_only": 0,
   "in_list_view": 1,
   "translatable": 0,
   "allow_on_submit": 1,
-  "description": "Breadcrumb path of the Kit Content Framework node this component maps to, e.g. \"KWL Kit > HS Components > Core Tubings > Stress Control Tube\". Set automatically when this BOM is generated from a Kit Content Mapping. Implemented as Data rather than a Link to Kit Content Framework Item because Frappe's Link autocomplete does not reliably query child-table (istable) doctypes — list permissions and the search dialog assume a standalone list view that child doctypes don't have."
+  "description": "The Kit Content Node that this BOM component maps to. Set automatically when this BOM is generated from a Kit Content Mapping. Previously stored as a breadcrumb path; now a Link to the node master for navigability — the field value is just the direct node name."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "BOM-explosion_level",
+  "dt": "BOM",
+  "fieldname": "explosion_level",
+  "label": "Explosion Level",
+  "fieldtype": "Small Text",
+  "insert_after": "note",
+  "read_only": 1,
+  "allow_on_submit": 1,
+  "description": "Populated automatically on Custom Exploded BOMs — comma-separated names of the Subassembly nodes that were kept aggregated (not exploded further) when this BOM was generated. Empty on fully-exploded and depth-level BOMs."
  }
 ]

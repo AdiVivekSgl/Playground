@@ -204,17 +204,25 @@ class KitContentMapping(Document):
 			self.save()
 		return created
 
-	def _build_bom(self, bom_item, component_qty_pairs, rows, is_default=False):
+	def _build_bom(self, bom_item, component_qty_pairs, rows, is_default=False, explosion_level=None):
 		"""`component_qty_pairs` is a list of (row, qty) tuples. qty is the
 		EFFECTIVE quantity for this specific BOM — for a normal single-level
 		build that's just the row's own qty; for a depth-bounded or fully
 		exploded build it's already been multiplied through every collapsed
-		level above it (see _explode_to_depth)."""
+		level above it (see _explode_to_depth).
+
+		`explosion_level`: comma-separated names of Subassembly nodes that were
+		kept aggregated for this BOM (Custom Exploded BOMs only). Written to
+		the BOM's custom explosion_level field so the aggregation choices are
+		visible directly on the BOM document without having to cross-reference
+		the mapping. Empty string for fully-exploded and depth-level BOMs."""
 		bom = frappe.new_doc("BOM")
 		bom.item = bom_item
 		bom.quantity = 1
 		if is_default:
 			bom.is_default = 1
+		if explosion_level is not None:
+			bom.explosion_level = explosion_level
 		for component, qty in component_qty_pairs:
 			if not component.item_code:
 				frappe.throw(
@@ -229,7 +237,9 @@ class KitContentMapping(Document):
 					"item_code": component.item_code,
 					"qty": qty or 1,
 					"uom": uom,
-					"node": self._node_path(rows, component),
+					# node is now a Link to Kit Content Node — store the node
+					# name directly rather than a computed breadcrumb path.
+					"node": component.node_name,
 				},
 			)
 		bom.insert()
@@ -325,14 +335,21 @@ class KitContentMapping(Document):
 		points: a vendor-supplied kit can stay a single line while
 		everything else in the same tree explodes all the way to raw
 		materials. Default (unchecked) is "explode" — you opt specific
-		nodes OUT, rather than opting branches in."""
+		nodes OUT, rather than opting branches in.
+
+		Returns (lines, kept_names) where `kept_names` is a list of
+		node_name values for Subassembly rows that were kept aggregated —
+		used to populate BOM.explosion_level on generated Custom BOMs."""
 		lines = []
+		kept_names = []
 
 		def walk(component, multiplier):
 			qty = (component.qty or 1) * multiplier
 			is_leaf_type = component.framework_node_type != "Subassembly"
 			if is_leaf_type or getattr(component, "keep_aggregated", 0):
 				lines.append((component, qty))
+				if component.framework_node_type == "Subassembly" and getattr(component, "keep_aggregated", 0):
+					kept_names.append(component.node_name)
 				return
 			children = self._resolve_components(rows, component)
 			if not children:
@@ -349,7 +366,7 @@ class KitContentMapping(Document):
 		for root_child in self._resolve_root_components(rows):
 			walk(root_child, 1)
 
-		return lines
+		return lines, kept_names
 
 	@frappe.whitelist()
 	def preview_custom_exploded_fg_bom(self):
@@ -358,10 +375,10 @@ class KitContentMapping(Document):
 		if not self.fg_item:
 			frappe.throw(_("Set an FG Item before previewing its BOM."))
 		rows = self._ordered_rows()
-		lines = self._explode_selective(rows)
+		lines, _kept = self._explode_selective(rows)
 		return [
 			{
-				"node": self._node_path(rows, component),
+				"node": component.node_name,
 				"item_code": component.item_code,
 				"qty": qty,
 				"uom": component.uom
@@ -380,8 +397,11 @@ class KitContentMapping(Document):
 		if not self.fg_item:
 			frappe.throw(_("Set an FG Item before generating its BOM."))
 		rows = self._ordered_rows()
-		lines = self._explode_selective(rows)
-		bom_name = self._build_bom(self.fg_item, lines, rows, is_default=False)
+		lines, kept_names = self._explode_selective(rows)
+		explosion_level = ", ".join(kept_names) if kept_names else ""
+		bom_name = self._build_bom(
+			self.fg_item, lines, rows, is_default=False, explosion_level=explosion_level
+		)
 		self.append("generated_boms", {"level_label": "Custom", "bom": bom_name})
 		self.save()
 		return bom_name

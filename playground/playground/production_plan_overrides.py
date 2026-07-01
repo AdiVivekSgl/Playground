@@ -6,6 +6,10 @@ Monkey-patch erpnext.manufacturing.doctype.production_plan.production_plan
   2. still appear explicitly in the Material Request Plan Items table as a
      zero-quantity row (rather than being silently absent), so it's clear
      the item was checked and simply needs no raw materials right now.
+
+Kept as a flat sibling module of the app package (rather than a nested
+`overrides/` subpackage) so build/packaging steps that don't reliably pick
+up brand-new subdirectories can't leave it out of a deploy.
 """
 import json
 

@@ -21,6 +21,7 @@ import erpnext.manufacturing.doctype.production_plan.production_plan as _pp_modu
 _original_get_items_for_material_requests = _pp_module.get_items_for_material_requests
 
 
+@frappe.whitelist()
 def get_items_for_material_requests(doc, warehouses=None, get_parent_warehouse_data=None):
     if isinstance(doc, str):
         doc = frappe._dict(json.loads(doc))

@@ -9,11 +9,13 @@
  "fields": [
   {
    "fieldname": "node_name",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
+   "options": "Kit Content Node",
    "label": "Node Name",
    "reqd": 1,
    "in_list_view": 1,
-   "columns": 3
+   "columns": 3,
+   "description": "Select from the Kit Content Node master. Selecting a node pre-fills Keep Aggregated from the master default; you can override it here."
   },
   {
    "fieldname": "indent_level",
@@ -33,6 +35,15 @@
    "reqd": 1,
    "in_list_view": 1,
    "columns": 2
+  },
+  {
+   "fieldname": "keep_aggregated",
+   "fieldtype": "Check",
+   "label": "Keep Aggregated (Custom Explosion)",
+   "default": "0",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Pre-filled from the Kit Content Node master when a node is selected. Propagates to the Kit Content Mapping as another independent default. Controls the Custom Exploded BOM explosion behaviour."
   }
  ],
  "permissions": []

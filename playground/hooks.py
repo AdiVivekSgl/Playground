@@ -12,6 +12,9 @@ app_license = "MIT"
 fixtures = [
 	{
 		"doctype": "Custom Field",
-		"filters": [["dt", "=", "BOM Item"], ["fieldname", "=", "node"]],
+		"filters": [
+			["dt", "in", ["BOM Item", "BOM"]],
+			["fieldname", "in", ["node", "explosion_level"]],
+		],
 	}
 ]

@@ -1,1 +1,2 @@
 # patches go here
+playground.playground.patches.v0_0.allow_zero_planned_qty_production_plan

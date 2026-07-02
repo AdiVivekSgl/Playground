@@ -239,16 +239,20 @@ def get_reserved_map(open_sos):
 	if not frappe.db.table_exists("Stock Reservation Entry"):
 		return {}
 
+	# ERPNext 15 Stock Reservation Entry has no `against_sales_order` column —
+	# reservations are stored generically as voucher_type/voucher_no, so a
+	# Sales Order reservation is voucher_type = "Sales Order", voucher_no = <SO>.
 	rows = frappe.db.sql(
 		"""
 		SELECT
-			sre.against_sales_order AS sales_order,
+			sre.voucher_no AS sales_order,
 			sre.item_code,
 			SUM(sre.reserved_qty) AS reserved_qty
 		FROM `tabStock Reservation Entry` sre
 		WHERE sre.docstatus = 1
-			AND sre.against_sales_order IN %(sos)s
-		GROUP BY sre.against_sales_order, sre.item_code
+			AND sre.voucher_type = 'Sales Order'
+			AND sre.voucher_no IN %(sos)s
+		GROUP BY sre.voucher_no, sre.item_code
 		""",
 		{"sos": open_sos},
 		as_dict=True,

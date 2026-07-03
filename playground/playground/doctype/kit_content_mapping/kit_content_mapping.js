@@ -210,7 +210,7 @@ frappe.ui.form.on("Kit Content Mapping", {
 					fi.node_type === "Passthrough"
 						? "Passthrough"
 						: fi.node_type === "Subassembly"
-						? "Subassembly Existing"
+						? "Subassembly New"
 						: "";
 				// Copy keep_aggregated from the framework row as a starting default
 				// — the user can override it freely in the mapping from here on.

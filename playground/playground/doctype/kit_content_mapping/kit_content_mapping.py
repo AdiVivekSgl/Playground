@@ -53,9 +53,54 @@ def create_from_bom(source_bom, fg_item=None):
 
 class KitContentMapping(Document):
 	def validate(self):
+		# Only tidy up incomplete rows on a real user Save. The relaxed
+		# saves (framework load, apply_node_structure, create_from_bom) all
+		# set ignore_mandatory and deliberately carry blank rows the user is
+		# about to fill in — running the cleanup there would delete/convert
+		# those rows the instant they're loaded.
+		if not self.flags.ignore_mandatory:
+			self._normalize_incomplete_rows()
 		# Runs before Frappe's own _validate_links(), so any Item we create
 		# here already exists by the time the item_code Link field is checked.
 		self._auto_create_new_items()
+
+	# ------------------------------------------------------------------ #
+	# On save: reconcile rows the user left without an Item Code
+	# ------------------------------------------------------------------ #
+	def _normalize_incomplete_rows(self):
+		"""Let a partially filled mapping save cleanly:
+		  - Subassembly rows with no Item Code become Passthrough structural
+		    nodes (they just forward their children).
+		  - Passthrough rows are structural and kept as-is even without an item.
+		  - Every other row with no Item Code (Purchase/Variable/blank) is
+		    dropped — it carries no useful information without an item.
+		Rows that already have an Item Code are always kept untouched."""
+		final_rows = []
+		for row in self.mapping_items:
+			if row.item_code:
+				final_rows.append(row.as_dict())
+				continue
+
+			is_subassembly = row.framework_node_type == "Subassembly" or (
+				row.treatment in ("Subassembly Existing", "Subassembly New")
+			)
+			is_passthrough = (
+				row.framework_node_type == "Passthrough" or row.treatment == "Passthrough"
+			)
+
+			if is_subassembly:
+				row.framework_node_type = "Passthrough"
+				row.treatment = "Passthrough"
+				row.bom = None
+				final_rows.append(row.as_dict())
+			elif is_passthrough:
+				final_rows.append(row.as_dict())
+			# else: no item code and not structural -> drop
+
+		self.set("mapping_items", [])
+		for row_dict in final_rows:
+			row_dict.pop("idx", None)  # let append() reassign sequential idx
+			self.append("mapping_items", row_dict)
 
 	@frappe.whitelist()
 	def save_relaxed(self):
@@ -517,7 +562,7 @@ class KitContentMapping(Document):
 					row_dict["qty"] = None
 					row_dict["bom"] = None
 				elif fw_item.node_type == "Subassembly" and not row_dict.get("treatment"):
-					row_dict["treatment"] = "Subassembly Existing"
+					row_dict["treatment"] = "Subassembly New"
 				# Purchase: treatment stays blank
 				claimed[row.node_name] = row_dict
 			else:
@@ -536,7 +581,7 @@ class KitContentMapping(Document):
 					"Passthrough"
 					if fw_item.node_type == "Passthrough"
 					else (
-						"Subassembly Existing"
+						"Subassembly New"
 						if fw_item.node_type == "Subassembly"
 						else ""
 					)

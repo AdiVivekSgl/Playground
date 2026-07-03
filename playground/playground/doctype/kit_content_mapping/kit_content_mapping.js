@@ -141,10 +141,33 @@ frappe.ui.form.on("Kit Content Mapping", {
 	kit_content_framework(frm) {
 		if (!frm.doc.kit_content_framework) return;
 		frappe.db.get_doc("Kit Content Framework", frm.doc.kit_content_framework).then((framework) => {
-			frm.clear_table("mapping_items");
 			// Cache framework node names so the node_name Link query can filter.
 			frm._framework_node_names = (framework.items || []).map((fi) => fi.node_name);
 
+			// If the mapping already has rows (e.g. loaded flat from a source
+			// BOM via the Work Order "Update BOM" button), do NOT wipe them.
+			// Reconciling those existing rows against this framework is exactly
+			// what "Apply node structure" does — it preserves the items and
+			// moves any that don't match a framework node under "Other".
+			// Clobbering the table here would delete the BOM items the user is
+			// trying to re-structure. Just record the framework and save so the
+			// "Apply node structure" button appears.
+			if (frm.doc.mapping_items && frm.doc.mapping_items.length) {
+				frm.call({ method: "save_relaxed", doc: frm.doc }).then(() => {
+					frappe.show_alert({
+						message: __(
+							"Framework \"{0}\" selected. Click \"Apply node structure\" to reorganise the existing rows under it.",
+							[framework.framework_name]
+						),
+						indicator: "blue",
+					});
+					frm.reload_doc();
+				});
+				return;
+			}
+
+			// Empty mapping → seed it straight from the framework template.
+			frm.clear_table("mapping_items");
 			(framework.items || []).forEach((fi) => {
 				const row = frm.add_child("mapping_items");
 				row.node_name = fi.node_name;

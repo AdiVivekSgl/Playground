@@ -32,12 +32,24 @@ function show_explosion_dialog(title, lines) {
 
 frappe.ui.form.on("Kit Content Mapping", {
 	refresh(frm) {
-		// ── Back to BOM Update Request ──────────────────────────────────
-		if (frm.doc.bom_update_request) {
-			frm.add_custom_button(
-				__("← Back to " + frm.doc.bom_update_request),
-				() => frappe.set_route("Form", "BOM Update Request", frm.doc.bom_update_request)
-			);
+		// ── Revert to original BOM ─────────────────────────────────────
+		if (frm.doc.source_bom) {
+			frm.add_custom_button(__("Revert to original BOM"), () => {
+				frappe.confirm(
+					__(
+						"This will clear all mapping rows and reload them flat from the original BOM. Framework selection and node assignments will be lost. Previously generated BOMs are not affected. Proceed?"
+					),
+					() => {
+						frm.call("revert_to_original_bom").then(() => {
+							frappe.show_alert({
+								message: __("Reverted — BOM items reloaded flat. Select a framework and run Apply Node Structure to re-structure."),
+								indicator: "blue",
+							});
+							frm.reload_doc();
+						});
+					}
+				);
+			});
 		}
 
 		// ── Apply node structure ─────────────────────────────────────────

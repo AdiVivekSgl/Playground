@@ -3,6 +3,45 @@ from frappe import _
 from frappe.model.document import Document
 
 
+@frappe.whitelist()
+def create_from_bom(source_bom, fg_item=None):
+	"""Module-level whitelisted function: creates a Kit Content Mapping
+	pre-populated from an existing BOM's items. Called directly from the
+	Work Order button so no intermediate doctype is needed. Each BOM item
+	becomes a flat Purchase row at indent_level=1 with no node or treatment
+	assigned — the user selects a framework and runs Apply Node Structure
+	to impose hierarchy on the flat list."""
+	bom_doc = frappe.get_doc("BOM", source_bom)
+	if not fg_item:
+		fg_item = bom_doc.item
+
+	kcm = frappe.new_doc("Kit Content Mapping")
+	kcm.fg_item = fg_item
+	kcm.source_bom = source_bom
+	kcm.flags.ignore_mandatory = True
+
+	for bom_item in bom_doc.items:
+		node_name = bom_item.get("node") or None
+		if node_name and not frappe.db.exists("Kit Content Node", node_name):
+			node_name = None
+		kcm.append(
+			"mapping_items",
+			{
+				"node_name": node_name,
+				"indent_level": 1,
+				"framework_node_type": "Purchase",
+				"treatment": "",
+				"item_code": bom_item.item_code,
+				"qty": bom_item.qty,
+				"uom": bom_item.uom
+				or frappe.db.get_value("Item", bom_item.item_code, "stock_uom"),
+			},
+		)
+
+	kcm.insert(ignore_permissions=True)
+	return kcm.name
+
+
 class KitContentMapping(Document):
 	def validate(self):
 		# Runs before Frappe's own _validate_links(), so any Item we create
@@ -136,7 +175,7 @@ class KitContentMapping(Document):
 				current_level = row.indent_level
 			if current_level <= 1:
 				break
-		return " > ".join(reversed(path))
+		return " > ".join(n for n in reversed(path) if n)
 
 	# ------------------------------------------------------------------ #
 	# Generate BOMs for the FG Item and every pending "Subassembly New"
@@ -505,7 +544,20 @@ class KitContentMapping(Document):
 				)
 				inserted_count += 1
 
+		# Unmatched rows (blank node or node not in framework) stay visible
+		# with node_name "Other" so the user can find and fix them rather than
+		# having them silently disappear to the bottom of a long list.
+		if unmatched and not frappe.db.exists("Kit Content Node", "Other"):
+			other_node = frappe.new_doc("Kit Content Node")
+			other_node.node_name = "Other"
+			other_node.keep_aggregated = 0
+			other_node.insert(ignore_permissions=True)
+
 		for row_dict in unmatched:
+			if not row_dict.get("node_name"):
+				row_dict["node_name"] = "Other"
+			row_dict.setdefault("indent_level", 1)
+			row_dict.setdefault("framework_node_type", "Purchase")
 			final_rows.append(row_dict)
 
 		self.set("mapping_items", [])
@@ -515,6 +567,43 @@ class KitContentMapping(Document):
 		self.save()
 
 		return {"inserted": inserted_count, "unmatched": len(unmatched)}
+
+	@frappe.whitelist()
+	def revert_to_original_bom(self):
+		"""Clear all mapping rows and reload them flat from source_bom,
+		exactly as they were when this mapping was first created from the
+		Work Order. Also clears the selected framework so the user can
+		re-assign nodes and re-apply structure from scratch. Previously
+		generated BOMs (fg_bom, generated_boms) are not touched since those
+		already exist in the system and reverting the mapping doesn't
+		retroactively un-generate them."""
+		if not self.source_bom:
+			frappe.throw(_("No source BOM is linked — nothing to revert to."))
+
+		bom_doc = frappe.get_doc("BOM", self.source_bom)
+		self.set("mapping_items", [])
+
+		for bom_item in bom_doc.items:
+			node_name = bom_item.get("node") or None
+			if node_name and not frappe.db.exists("Kit Content Node", node_name):
+				node_name = None
+			self.append(
+				"mapping_items",
+				{
+					"node_name": node_name,
+					"indent_level": 1,
+					"framework_node_type": "Purchase",
+					"treatment": "",
+					"item_code": bom_item.item_code,
+					"qty": bom_item.qty,
+					"uom": bom_item.uom
+					or frappe.db.get_value("Item", bom_item.item_code, "stock_uom"),
+				},
+			)
+
+		self.kit_content_framework = None
+		self.flags.ignore_mandatory = True
+		self.save()
 
 	@frappe.whitelist()
 	def explode_bom_for_row(self, row_name, bom_name):

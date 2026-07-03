@@ -12,7 +12,6 @@
    "fieldtype": "Link",
    "options": "Kit Content Node",
    "label": "Node",
-   "read_only": 1,
    "in_list_view": 1,
    "columns": 3
   },

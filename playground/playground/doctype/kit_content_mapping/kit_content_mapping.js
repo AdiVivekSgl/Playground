@@ -32,6 +32,35 @@ function show_explosion_dialog(title, lines) {
 
 frappe.ui.form.on("Kit Content Mapping", {
 	refresh(frm) {
+		// ── Back to BOM Update Request ──────────────────────────────────
+		if (frm.doc.bom_update_request) {
+			frm.add_custom_button(
+				__("← Back to " + frm.doc.bom_update_request),
+				() => frappe.set_route("Form", "BOM Update Request", frm.doc.bom_update_request)
+			);
+		}
+
+		// ── Apply node structure ─────────────────────────────────────────
+		if (frm.doc.kit_content_framework && frm.doc.mapping_items && frm.doc.mapping_items.length) {
+			frm.add_custom_button(__("Apply node structure"), () => {
+				frm.call("apply_node_structure").then((r) => {
+					const res = r.message || {};
+					const msg = __(
+						"{0} node(s) inserted from framework, {1} row(s) unmatched → moved to bottom.",
+						[res.inserted || 0, res.unmatched || 0]
+					);
+					frappe.show_alert({ message: msg, indicator: res.unmatched ? "orange" : "green" });
+					frm.reload_doc();
+				});
+			});
+		}
+
+		// ── Node name filter: restrict to nodes in the selected framework ─
+		frm.set_query("node_name", "mapping_items", () => {
+			if (!frm._framework_node_names || !frm._framework_node_names.length) return {};
+			return { filters: [["name", "in", frm._framework_node_names]] };
+		});
+
 		frm.set_query("bom", "mapping_items", (doc, cdt, cdn) => {
 			const row = locals[cdt][cdn];
 			return {
@@ -101,6 +130,9 @@ frappe.ui.form.on("Kit Content Mapping", {
 		if (!frm.doc.kit_content_framework) return;
 		frappe.db.get_doc("Kit Content Framework", frm.doc.kit_content_framework).then((framework) => {
 			frm.clear_table("mapping_items");
+			// Cache framework node names so the node_name Link query can filter.
+			frm._framework_node_names = (framework.items || []).map((fi) => fi.node_name);
+
 			(framework.items || []).forEach((fi) => {
 				const row = frm.add_child("mapping_items");
 				row.node_name = fi.node_name;

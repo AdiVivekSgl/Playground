@@ -22,9 +22,9 @@
    "fieldtype": "Link",
    "label": "Kit Content Framework",
    "options": "Kit Content Framework",
-   "reqd": 1,
    "in_list_view": 1,
-   "description": "Loads the node structure into the table below."
+   "description": "Loads the node structure into the table below.",
+   "reqd": 0
   },
   {
    "fieldname": "default_item_group",
@@ -50,6 +50,22 @@
    "options": "Item",
    "in_list_view": 1,
    "description": "Tags this mapping to a Finished Good item."
+  },
+  {
+   "fieldname": "source_bom",
+   "fieldtype": "Link",
+   "label": "Source BOM",
+   "options": "BOM",
+   "read_only": 1,
+   "description": "The existing BOM that was imported to create this mapping's item rows (set automatically when created from a BOM Update Request)."
+  },
+  {
+   "fieldname": "bom_update_request",
+   "fieldtype": "Link",
+   "label": "BOM Update Request",
+   "options": "BOM Update Request",
+   "read_only": 1,
+   "description": "The BOM Update Request that created this mapping. Navigate back to it to change the request status or trigger BOM generation."
   },
   {
    "fieldname": "fg_bom",

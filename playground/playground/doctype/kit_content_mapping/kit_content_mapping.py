@@ -3,14 +3,38 @@ from frappe import _
 from frappe.model.document import Document
 
 
+def _exploded_bom_rows(bom_doc):
+	"""mapping_items row dicts built from a BOM's FULLY EXPLODED items — the
+	raw-material leaves (BOM Explosion Item), not the top-level components.
+	Explosion Item rows carry stock_qty/stock_uom (ERPNext normalises to the
+	stock UOM) and have no `node` link, so every row starts as a flat,
+	node-less Purchase row for the user to structure via Apply Node
+	Structure."""
+	rows = []
+	for d in bom_doc.exploded_items:
+		rows.append(
+			{
+				"node_name": None,
+				"indent_level": 1,
+				"framework_node_type": "Purchase",
+				"treatment": "",
+				"item_code": d.item_code,
+				"qty": d.stock_qty,
+				"uom": d.stock_uom
+				or frappe.db.get_value("Item", d.item_code, "stock_uom"),
+			}
+		)
+	return rows
+
+
 @frappe.whitelist()
 def create_from_bom(source_bom, fg_item=None):
 	"""Module-level whitelisted function: creates a Kit Content Mapping
-	pre-populated from an existing BOM's items. Called directly from the
-	Work Order button so no intermediate doctype is needed. Each BOM item
-	becomes a flat Purchase row at indent_level=1 with no node or treatment
-	assigned — the user selects a framework and runs Apply Node Structure
-	to impose hierarchy on the flat list."""
+	pre-populated from an existing BOM's FULLY EXPLODED items. Called directly
+	from the Work Order button so no intermediate doctype is needed. Each
+	exploded raw-material becomes a flat Purchase row at indent_level=1 with no
+	node or treatment assigned — the user selects a framework and runs Apply
+	Node Structure to impose hierarchy on the flat list."""
 	bom_doc = frappe.get_doc("BOM", source_bom)
 	if not fg_item:
 		fg_item = bom_doc.item
@@ -20,23 +44,8 @@ def create_from_bom(source_bom, fg_item=None):
 	kcm.source_bom = source_bom
 	kcm.flags.ignore_mandatory = True
 
-	for bom_item in bom_doc.items:
-		node_name = bom_item.get("node") or None
-		if node_name and not frappe.db.exists("Kit Content Node", node_name):
-			node_name = None
-		kcm.append(
-			"mapping_items",
-			{
-				"node_name": node_name,
-				"indent_level": 1,
-				"framework_node_type": "Purchase",
-				"treatment": "",
-				"item_code": bom_item.item_code,
-				"qty": bom_item.qty,
-				"uom": bom_item.uom
-				or frappe.db.get_value("Item", bom_item.item_code, "stock_uom"),
-			},
-		)
+	for row in _exploded_bom_rows(bom_doc):
+		kcm.append("mapping_items", row)
 
 	kcm.insert(ignore_permissions=True)
 	return kcm.name
@@ -583,23 +592,8 @@ class KitContentMapping(Document):
 		bom_doc = frappe.get_doc("BOM", self.source_bom)
 		self.set("mapping_items", [])
 
-		for bom_item in bom_doc.items:
-			node_name = bom_item.get("node") or None
-			if node_name and not frappe.db.exists("Kit Content Node", node_name):
-				node_name = None
-			self.append(
-				"mapping_items",
-				{
-					"node_name": node_name,
-					"indent_level": 1,
-					"framework_node_type": "Purchase",
-					"treatment": "",
-					"item_code": bom_item.item_code,
-					"qty": bom_item.qty,
-					"uom": bom_item.uom
-					or frappe.db.get_value("Item", bom_item.item_code, "stock_uom"),
-				},
-			)
+		for row in _exploded_bom_rows(bom_doc):
+			self.append("mapping_items", row)
 
 		self.kit_content_framework = None
 		self.flags.ignore_mandatory = True

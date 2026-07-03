@@ -573,6 +573,15 @@ class KitContentMapping(Document):
 		for row_dict in final_rows:
 			self.append("mapping_items", row_dict)
 
+		# The framework nodes we just inserted are intentionally blank (a
+		# Purchase node has no item_code yet, a Subassembly node has no bom) so
+		# the user can fill them in — the same reason the framework-load flow
+		# uses save_relaxed. Without ignore_mandatory, this save() would throw
+		# on those blank rows and roll back the entire reorganization, making
+		# it look like Apply Node Structure wiped everything and left a blank
+		# structure. The ordinary Save button still enforces every mandatory
+		# field once the user actually fills the rows in.
+		self.flags.ignore_mandatory = True
 		self.save()
 
 		return {"inserted": inserted_count, "unmatched": len(unmatched)}

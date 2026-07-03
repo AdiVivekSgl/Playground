@@ -30,8 +30,41 @@ function show_explosion_dialog(title, lines) {
 	}).show();
 }
 
+// Visually convey the mapping tree directly in the grid's Node column:
+//   • indent the text by indent_level (level 1 = flush left)
+//   • bold Subassembly rows, italicise Passthrough rows
+// Implemented as a grid cell formatter on node_name so it survives grid
+// refreshes without touching the stored data. Read-only display only — the
+// underlying Link value is unchanged.
+function style_node_column(frm) {
+	const grid = frm.fields_dict.mapping_items && frm.fields_dict.mapping_items.grid;
+	if (!grid) return;
+	const df = grid.get_docfield("node_name");
+	if (!df) return;
+
+	df.formatter = function (value, field, options, doc) {
+		const text = frappe.utils.escape_html(value || "");
+		if (!doc) return text;
+
+		const level = parseInt(doc.indent_level, 10) || 1;
+		const pad = Math.max(0, level - 1) * 16; // 16px per indent level
+
+		let style = `padding-left:${pad}px;`;
+		if (doc.framework_node_type === "Subassembly") {
+			style += "font-weight:600;";
+		} else if (doc.framework_node_type === "Passthrough") {
+			style += "font-style:italic;";
+		}
+		return `<span style="${style}">${text}</span>`;
+	};
+
+	grid.refresh();
+}
+
 frappe.ui.form.on("Kit Content Mapping", {
 	refresh(frm) {
+		style_node_column(frm);
+
 		// ── Revert to original BOM ─────────────────────────────────────
 		if (frm.doc.source_bom) {
 			frm.add_custom_button(__("Revert to original BOM"), () => {

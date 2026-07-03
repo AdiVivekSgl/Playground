@@ -1,0 +1,116 @@
+{
+ "doctype": "DocType",
+ "name": "BOM Update Request",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "Expression (old style)",
+ "autoname": "BUR-.#####",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "fields": [
+  {
+   "fieldname": "col_left",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nSubmitted\nApproved\nRejected",
+   "default": "Draft",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "work_order",
+   "fieldtype": "Link",
+   "label": "Work Order",
+   "options": "Work Order",
+   "in_list_view": 1,
+   "description": "Optional — leave blank to raise a request independently of a specific production run."
+  },
+  {
+   "fieldname": "fg_item",
+   "fieldtype": "Link",
+   "label": "FG Item",
+   "options": "Item",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "current_bom",
+   "fieldtype": "Link",
+   "label": "Current BOM",
+   "options": "BOM",
+   "reqd": 1,
+   "description": "The existing BOM whose items will be pre-loaded into the mapping for review and correction."
+  },
+  {
+   "fieldname": "col_right",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "kit_content_mapping",
+   "fieldtype": "Link",
+   "label": "Kit Content Mapping",
+   "options": "Kit Content Mapping",
+   "read_only": 1,
+   "description": "Created automatically on save. Open it to assign nodes, apply the framework structure, and correct item details."
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Link",
+   "label": "Requested by",
+   "options": "User",
+   "default": "__user",
+   "read_only": 1
+  },
+  {
+   "fieldname": "rejection_reason",
+   "fieldtype": "Small Text",
+   "label": "Rejection reason",
+   "read_only": 1,
+   "depends_on": "eval:doc.status == 'Rejected'"
+  },
+  {
+   "fieldname": "notes_section",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "requester_notes",
+   "fieldtype": "Small Text",
+   "label": "Requester notes",
+   "description": "Describe what needs to change and why — context for the reviewer."
+  },
+  {
+   "fieldname": "col_notes",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reviewer_notes",
+   "fieldtype": "Small Text",
+   "label": "Reviewer notes",
+   "depends_on": "eval:doc.status != 'Draft'"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1, "write": 1, "create": 1, "delete": 1
+  },
+  {
+   "role": "Manufacturing Manager",
+   "read": 1, "write": 1, "create": 1, "delete": 0
+  },
+  {
+   "role": "Manufacturing User",
+   "read": 1, "write": 1, "create": 1, "delete": 0
+  }
+ ]
+}

@@ -9,6 +9,10 @@ app_license = "MIT"
 # Ships the "node" custom field on BOM Item with this app, so it travels
 # with `bench migrate` / app installs rather than being a one-off manual
 # customization that doesn't survive a fresh site.
+doctype_js = {
+	"Work Order": "public/js/work_order.js",
+}
+
 fixtures = [
 	{
 		"doctype": "Custom Field",

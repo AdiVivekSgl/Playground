@@ -410,6 +410,112 @@ class KitContentMapping(Document):
 	# Existing BOM selected -> explode fully, diff against the framework,
 	# record (not write back) anything the framework didn't anticipate
 	# ------------------------------------------------------------------ #
+
+	@frappe.whitelist()
+	def apply_node_structure(self):
+		"""Reorders mapping_items to match the selected Kit Content Framework,
+		applies indent levels and node types from the framework, and inserts
+		any framework nodes that have no corresponding mapping row yet.
+
+		Idempotent: safe to run multiple times. On each run:
+		  - Rows with a valid node_name → moved to their framework position,
+		    indent_level / framework_node_type / keep_aggregated stamped from
+		    the framework item.
+		  - Framework nodes with no claimed row → inserted (empty item_code for
+		    the user to fill in; Passthroughs get no item at all).
+		  - Rows with no node_name, or a node not in this framework → moved to
+		    the bottom of the table, flagged is_framework_extra=0 (they aren't
+		    "extra" in the BOM-explosion sense, just unassigned — the flag is
+		    reused here to give them the "unmatched" amber highlight in the UI).
+		  - Rows with is_framework_extra=1 (from a prior BOM explosion on a
+		    Subassembly Existing row) → also moved to the bottom; re-select the
+		    BOM on the subassembly row after apply_node_structure to re-explode.
+		"""
+		if not self.kit_content_framework:
+			frappe.throw(
+				_(
+					"Select a Kit Content Framework before applying node structure — "
+					"the framework defines how this mapping's rows will be ordered "
+					"and what indent level / type each node carries."
+				)
+			)
+
+		framework = frappe.get_doc("Kit Content Framework", self.kit_content_framework)
+		fw_node_map = {item.node_name: item for item in framework.items}
+
+		claimed = {}   # node_name → row dict (first matching row wins)
+		unmatched = [] # rows with no/unknown node, or is_framework_extra
+
+		for row in self.mapping_items:
+			row_dict = row.as_dict()
+			row_dict.pop("idx", None)
+
+			if row.is_framework_extra:
+				# Exploded sub-BOM rows — moved to bottom; user can re-explode
+				# after the structure is applied.
+				row_dict["is_framework_extra"] = 1
+				unmatched.append(row_dict)
+				continue
+
+			if row.node_name and row.node_name in fw_node_map and row.node_name not in claimed:
+				fw_item = fw_node_map[row.node_name]
+				row_dict["indent_level"] = fw_item.indent_level
+				row_dict["framework_node_type"] = fw_item.node_type
+				row_dict["keep_aggregated"] = fw_item.keep_aggregated
+				# Passthrough nodes never carry an item.
+				if fw_item.node_type == "Passthrough":
+					row_dict["treatment"] = "Passthrough"
+					row_dict["item_code"] = None
+					row_dict["qty"] = None
+					row_dict["bom"] = None
+				elif fw_item.node_type == "Subassembly" and not row_dict.get("treatment"):
+					row_dict["treatment"] = "Subassembly Existing"
+				# Purchase: treatment stays blank
+				claimed[row.node_name] = row_dict
+			else:
+				# Duplicate node claim, blank node, or node not in framework.
+				row_dict["is_framework_extra"] = 0
+				unmatched.append(row_dict)
+
+		# Build the final ordered list, inserting missing framework nodes.
+		final_rows = []
+		inserted_count = 0
+		for fw_item in framework.items:
+			if fw_item.node_name in claimed:
+				final_rows.append(claimed[fw_item.node_name])
+			else:
+				treatment = (
+					"Passthrough"
+					if fw_item.node_type == "Passthrough"
+					else (
+						"Subassembly Existing"
+						if fw_item.node_type == "Subassembly"
+						else ""
+					)
+				)
+				final_rows.append(
+					{
+						"node_name": fw_item.node_name,
+						"indent_level": fw_item.indent_level,
+						"framework_node_type": fw_item.node_type,
+						"treatment": treatment,
+						"keep_aggregated": fw_item.keep_aggregated,
+						"is_framework_extra": 0,
+					}
+				)
+				inserted_count += 1
+
+		for row_dict in unmatched:
+			final_rows.append(row_dict)
+
+		self.set("mapping_items", [])
+		for row_dict in final_rows:
+			self.append("mapping_items", row_dict)
+
+		self.save()
+
+		return {"inserted": inserted_count, "unmatched": len(unmatched)}
+
 	@frappe.whitelist()
 	def explode_bom_for_row(self, row_name, bom_name):
 		row = self._get_row(row_name)

@@ -130,7 +130,7 @@ def create_production_plan(items):
 
 def execute(filters=None):
 	filters = filters or {}
-	unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
+	unreserved_basis = filters.get("unreserved_basis") or "Only Displayed SOs"
 
 	so_items = get_open_so_items(filters)
 	if not so_items:
@@ -216,6 +216,10 @@ def execute(filters=None):
 		if required_to_produce > 0:
 			items_needing += 1
 
+	# SO-value metrics for the summary cards + the "Top 5 SOs by Pending Value"
+	# chart. Pending value = pending_qty * rate, summed per SO across its items.
+	total_pending_value, multi_so_customers, top5 = _value_metrics(so_items, so_customer)
+
 	report_summary = [
 		{
 			"label": _("Total Qty to Produce"),
@@ -223,11 +227,26 @@ def execute(filters=None):
 			"datatype": "Float",
 			"indicator": "Orange" if total_to_produce else "Green",
 		},
+		{"label": _("Pending Net Total (Displayed SOs)"), "value": total_pending_value, "datatype": "Currency"},
+		{"label": _("Customers with >1 Open SO"), "value": multi_so_customers, "datatype": "Int"},
 		{"label": _("Items Needing Production"), "value": items_needing, "datatype": "Int"},
 		{"label": _("Open Sales Orders"), "value": len(all_open_sos), "datatype": "Int"},
 	]
 
-	return columns, data, None, None, report_summary
+	chart = None
+	if top5:
+		chart = {
+			"type": "bar",
+			"data": {
+				"labels": [_so_header_label(so, so_customer, customer_name_map) for so, _v in top5],
+				"datasets": [{"name": _("Pending Value"), "values": [round(v, 2) for _so, v in top5]}],
+			},
+			"colors": ["#7cd6fd"],
+			"axisOptions": {"shortenYAxisNumbers": 1},
+			"title": _("Top 5 Sales Orders by Pending Value"),
+		}
+
+	return columns, data, None, chart, report_summary
 
 
 def get_summary_columns():
@@ -257,6 +276,12 @@ def get_open_so_items(filters):
 	conditions = ""
 	values = {"statuses": OPEN_SO_STATUSES}
 
+	# Submitted only by default. "Include Draft SOs" also pulls docstatus 0
+	# (status "Draft"); cancelled (docstatus 2) is always excluded.
+	docstatus_clause = (
+		"so.docstatus IN (0, 1)" if cint(filters.get("include_draft")) else "so.docstatus = 1"
+	)
+
 	if filters.get("item_code"):
 		conditions += " AND soi.item_code = %(item_code)s"
 		values["item_code"] = filters.get("item_code")
@@ -280,15 +305,16 @@ def get_open_so_items(filters):
 			so.transaction_date,
 			so.customer,
 			soi.item_code,
+			soi.rate AS rate,
 			(soi.qty - soi.delivered_qty) AS pending_qty
 		FROM `tabSales Order Item` soi
 		INNER JOIN `tabSales Order` so ON so.name = soi.parent
-		WHERE so.docstatus = 1
+		WHERE {docstatus_clause}
 			AND so.status IN %(statuses)s
 			AND (soi.qty - soi.delivered_qty) > 0
 			{conditions}
 		ORDER BY so.{date_field} ASC, soi.parent ASC
-		""".format(conditions=conditions, date_field=date_field),
+		""".format(docstatus_clause=docstatus_clause, conditions=conditions, date_field=date_field),
 		values,
 		as_dict=True,
 	)
@@ -330,6 +356,28 @@ def _so_header_label(so, so_customer, customer_name_map):
 	customer = so_customer.get(so)
 	name = customer_name_map.get(customer) or customer
 	return "{0} ({1})".format(name, so) if name else so
+
+
+def _value_metrics(so_items, so_customer):
+	"""Returns (total_pending_value, multi_so_customer_count, top5) where:
+	  - total_pending_value = Σ pending_qty * rate over every displayed SO line
+	  - multi_so_customer_count = customers with more than one open SO here
+	  - top5 = [(sales_order, pending_value), ...] top 5 SOs by pending value
+	"""
+	so_pending_value = {}
+	for r in so_items:
+		so_pending_value[r.sales_order] = (
+			so_pending_value.get(r.sales_order, 0.0) + flt(r.pending_qty) * flt(r.rate)
+		)
+	total_pending_value = sum(so_pending_value.values())
+
+	customer_sos = {}
+	for so, customer in so_customer.items():
+		customer_sos.setdefault(customer, set()).add(so)
+	multi_so_customers = sum(1 for sos in customer_sos.values() if len(sos) > 1)
+
+	top5 = sorted(so_pending_value.items(), key=lambda kv: kv[1], reverse=True)[:5]
+	return total_pending_value, multi_so_customers, top5
 
 
 def get_reserved_map(open_sos):

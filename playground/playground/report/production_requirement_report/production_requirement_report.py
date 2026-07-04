@@ -39,6 +39,9 @@ active use, Reserved reads 0 for every SO - the report still works, it just
 won't net reservations out of demand.
 """
 
+import base64
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, nowdate
@@ -234,9 +237,10 @@ def execute(filters=None):
 		if required_to_produce > 0:
 			items_needing += 1
 
-	# SO-value metrics for the summary cards + the "Top 5 SOs by Pending Value"
-	# chart. Pending value = pending_qty * rate, summed per SO across its items.
-	total_pending_value, multi_so_customers, top5 = _value_metrics(so_items, so_customer)
+	# SO-value metrics for the summary cards + the "Top 20 SOs by Pending Value
+	# & Qty" combination chart. Pending value = pending_qty * base_rate (company
+	# currency), pending qty = qty - delivered_qty, both summed per SO.
+	total_pending_value, multi_so_customers, top_sos = _value_metrics(so_items, so_customer)
 
 	report_summary = [
 		{
@@ -251,20 +255,12 @@ def execute(filters=None):
 		{"label": _("Open Sales Orders"), "value": len(all_open_sos), "datatype": "Int"},
 	]
 
-	chart = None
-	if top5:
-		chart = {
-			"type": "bar",
-			"data": {
-				"labels": [_so_header_label(so, so_customer, customer_name_map) for so, _v in top5],
-				"datasets": [{"name": _("Pending Value"), "values": [round(v, 2) for _so, v in top5]}],
-			},
-			"colors": ["#7cd6fd"],
-			"axisOptions": {"shortenYAxisNumbers": 1},
-			"title": _("Top 5 Sales Orders by Pending Value"),
-		}
+	# The dual-axis (value bars + qty line) chart can't be done with Frappe's
+	# built-in frappe-charts, so it's returned as an HTML `message` and drawn
+	# with Chart.js by the report's client script (see after_datatable_render).
+	message = _combo_chart_message(top_sos, so_customer, customer_name_map)
 
-	return columns, data, None, chart, report_summary
+	return columns, data, message, None, report_summary
 
 
 def get_summary_columns():
@@ -379,16 +375,21 @@ def _so_header_label(so, so_customer, customer_name_map):
 
 
 def _value_metrics(so_items, so_customer):
-	"""Returns (total_pending_value, multi_so_customer_count, top5) where:
+	"""Returns (total_pending_value, multi_so_customer_count, top_sos) where:
 	  - total_pending_value = Σ pending_qty * rate over every displayed SO line
 	    (`rate` is base_rate — company currency)
 	  - multi_so_customer_count = customers with more than one open SO here
-	  - top5 = [(sales_order, pending_value), ...] top 5 SOs by pending value
+	  - top_sos = [(sales_order, pending_value, pending_qty), ...] top 20 SOs
+	    by pending value
 	"""
 	so_pending_value = {}
+	so_pending_qty = {}
 	for r in so_items:
 		so_pending_value[r.sales_order] = (
 			so_pending_value.get(r.sales_order, 0.0) + flt(r.pending_qty) * flt(r.rate)
+		)
+		so_pending_qty[r.sales_order] = (
+			so_pending_qty.get(r.sales_order, 0.0) + flt(r.pending_qty)
 		)
 	total_pending_value = sum(so_pending_value.values())
 
@@ -397,8 +398,37 @@ def _value_metrics(so_items, so_customer):
 		customer_sos.setdefault(customer, set()).add(so)
 	multi_so_customers = sum(1 for sos in customer_sos.values() if len(sos) > 1)
 
-	top5 = sorted(so_pending_value.items(), key=lambda kv: kv[1], reverse=True)[:5]
-	return total_pending_value, multi_so_customers, top5
+	ranked = sorted(so_pending_value.items(), key=lambda kv: kv[1], reverse=True)[:20]
+	top_sos = [(so, value, so_pending_qty.get(so, 0.0)) for so, value in ranked]
+	return total_pending_value, multi_so_customers, top_sos
+
+
+def _combo_chart_message(top_sos, so_customer, customer_name_map):
+	"""HTML for the top-20 dual-axis chart: pending value (bars, left axis) with
+	pending qty (line, right axis) overlaid. The series is base64-encoded into a
+	canvas data attribute; the report's client script decodes it and draws with
+	Chart.js (frappe-charts can't do a second y-axis). Returns None when empty."""
+	if not top_sos:
+		return None
+
+	series = {
+		"labels": [_so_header_label(so, so_customer, customer_name_map) for so, _v, _q in top_sos],
+		"value": [round(v, 2) for _so, v, _q in top_sos],
+		"qty": [round(q, 2) for _so, _v, q in top_sos],
+	}
+	payload = base64.b64encode(json.dumps(series).encode("utf-8")).decode("ascii")
+
+	return (
+		'<div style="display:flex;gap:16px;font-size:12px;margin:6px 0 6px;color:var(--text-muted);">'
+		'<span><span style="display:inline-block;width:11px;height:11px;border-radius:2px;'
+		'background:#2a78d6;vertical-align:middle;"></span> Pending value (left axis)</span>'
+		'<span><span style="display:inline-block;width:16px;border-top:2px solid #eb6834;'
+		'vertical-align:middle;"></span> Pending qty (right axis)</span>'
+		"</div>"
+		'<div style="position:relative;height:380px;width:100%;">'
+		'<canvas id="prr-combo-chart" data-series="{0}"></canvas>'
+		"</div>"
+	).format(payload)
 
 
 def get_reserved_map(open_sos):

@@ -34,16 +34,56 @@ frappe.query_reports["Production Requirement Report"] = {
 			options: "Customer",
 		},
 		{
+			fieldname: "date_basis",
+			label: __("Date Basis"),
+			fieldtype: "Select",
+			options: ["Document Creation Date", "Delivery Date", "Custom Updated Delivery Date"].join("\n"),
+			default: "Document Creation Date",
+			// Which Sales Order date the From/To range filters on.
+		},
+		{
+			fieldname: "from_date",
+			label: __("From Date"),
+			fieldtype: "Date",
+		},
+		{
+			fieldname: "to_date",
+			label: __("To Date"),
+			fieldtype: "Date",
+		},
+		{
 			fieldname: "unreserved_basis",
 			label: __("Unreserved Stock Basis"),
 			fieldtype: "Select",
 			options: ["All Reservations", "Only Displayed SOs"].join("\n"),
 			default: "All Reservations",
-			// Controls what "Total Avlbl Unreserved Stock" nets out of the
-			// stores warehouse on-hand: every reservation (truly free stock),
-			// or only reservations tied to the Sales Orders shown here.
+			// What "Total Avlbl Free Stock" nets out of the stores warehouse
+			// on-hand: every reservation (truly free stock), or only reservations
+			// tied to the Sales Orders shown here.
+		},
+		{
+			fieldname: "hide_fulfilled",
+			label: __("Hide Fulfilled SOs (no shortfall)"),
+			fieldtype: "Check",
+			default: 0,
+			// Hides the column pair for any SO whose lines are all fully reserved.
+			// Purely visual — Required to Produce still counts every open SO.
 		},
 	],
+
+	// Cell formatting for readability: highlight Required to Produce when there's
+	// a real shortfall, and flag negative free stock in red.
+	formatter(value, row, column, data, default_formatter) {
+		let formatted = default_formatter(value, row, column, data);
+		if (!data) return formatted;
+
+		if (column.fieldname === "required_to_produce" && flt(data.required_to_produce) > 0) {
+			formatted = `<span style="color:#b02a37;font-weight:600;">${formatted}</span>`;
+		} else if (column.fieldname === "total_avlbl_stock" && flt(data.total_avlbl_stock) < 0) {
+			formatted = `<span style="color:#b02a37;">${formatted}</span>`;
+		}
+		return formatted;
+	},
 
 	// Native Script Report columns hard-code editable:false when the DataTable is built
 	// (see frappe/frappe#27414), so we flip it back on here. Buffer Qty edits are handled

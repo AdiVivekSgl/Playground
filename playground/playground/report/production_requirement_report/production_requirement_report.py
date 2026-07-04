@@ -323,7 +323,9 @@ def get_open_so_items(filters):
 			so.transaction_date,
 			so.customer,
 			soi.item_code,
-			soi.rate AS rate,
+			-- base_rate = line rate in COMPANY currency, so the Pending Net
+			-- Total card is in company currency and never mixes currencies.
+			soi.base_rate AS rate,
 			(soi.qty - soi.delivered_qty) AS pending_qty
 		FROM `tabSales Order Item` soi
 		INNER JOIN `tabSales Order` so ON so.name = soi.parent
@@ -379,6 +381,7 @@ def _so_header_label(so, so_customer, customer_name_map):
 def _value_metrics(so_items, so_customer):
 	"""Returns (total_pending_value, multi_so_customer_count, top5) where:
 	  - total_pending_value = Σ pending_qty * rate over every displayed SO line
+	    (`rate` is base_rate — company currency)
 	  - multi_so_customer_count = customers with more than one open SO here
 	  - top5 = [(sales_order, pending_value), ...] top 5 SOs by pending value
 	"""

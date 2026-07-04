@@ -103,9 +103,9 @@ frappe.query_reports["Production Requirement Report"] = {
 	},
 
 	// Native Script Report columns hard-code editable:false when the DataTable is built
-	// (see frappe/frappe#27414), so we flip it back on here. Buffer Qty edits are handled
-	// entirely client-side: they recompute Required to Produce for this session only and
-	// are NEVER written back to the Item master (Item.safety_stock is only ever read, on load).
+	// (see frappe/frappe#27414), so we flip it back on here. A Buffer Qty edit recomputes
+	// Required to Produce inline AND is persisted back to Item.safety_stock via
+	// update_buffer_qty (guarded by Item write permission on the server).
 	get_datatable_options(datatable_options) {
 		datatable_options.columns.forEach((column) => {
 			if (column.id === "buffer_qty") {
@@ -133,9 +133,8 @@ frappe.query_reports["Production Requirement Report"] = {
 
 			const required_to_produce = prr_recompute_required_to_produce(row_values, buffer_qty);
 
-			// Keep the report's own in-memory data array in sync (used by the
-			// Create Production Plan button, exports, etc.) - this array is never
-			// sent anywhere; it just lives for the current browser session.
+			// Keep the report's in-memory data array in sync (used by Create
+			// Production Plan, exports, and the redraw below).
 			const report_row = (frappe.query_report.data || []).find(
 				(r) => r.item_code === row_values.item_code
 			);
@@ -148,9 +147,18 @@ frappe.query_reports["Production Requirement Report"] = {
 				frappe.query_report.datatable.refresh(frappe.query_report.data);
 			}
 
-			frappe.show_alert({
-				message: __("Buffer Qty updated for this session only — not saved to the Item master."),
-				indicator: "blue",
+			// Persist to the Item master (Item.safety_stock). On failure the
+			// server surfaces the error dialog; the in-memory value stays until
+			// the next reload, which will re-read the (unchanged) master value.
+			frappe.call({
+				method: `${PRR_METHOD_PATH}.update_buffer_qty`,
+				args: { item_code: row_values.item_code, buffer_qty: buffer_qty },
+				callback() {
+					frappe.show_alert({
+						message: __("Buffer Qty saved to Item master ({0}).", [row_values.item_code]),
+						indicator: "green",
+					});
+				},
 			});
 		};
 

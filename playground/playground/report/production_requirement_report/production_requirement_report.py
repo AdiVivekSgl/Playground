@@ -5,44 +5,59 @@
 Production Requirement Report
 ==============================
 
-Column A          : FG Item (any item that appears on at least one open Sales Order)
-Per open SO       : a "<SO> Pending" / "<SO> Reserved" column pair
-                     - Pending  = SO Item qty not yet delivered (qty - delivered_qty)
-                     - Reserved = qty already reserved against that specific SO via
-                                  Stock Reservation Entry (docstatus = 1)
-Near the end      : Total Avlbl Unreserved Stock (on-hand qty in STOCK_WAREHOUSE
-                     only, minus reservations there. The "Unreserved Stock Basis"
-                     filter chooses which reservations to net out:
-                       - All Reservations  -> Bin.reserved_qty (any reservation)
-                       - Only Displayed SOs -> Stock Reservation Entry qty for the
-                         Sales Orders shown in this report),
-                     Buffer Qty
-                     (defaults from Item.safety_stock on load; editable inline in the
-                     report grid, but edits are session-only scratch values - they
-                     recompute Required to Produce in the browser and are never written
-                     back to the Item master. Reload/refresh the report to reset.)
-Rightmost         : Required to Produce (calculated)
+Layout (left -> right):
+  FG Item, Item Name, Total Avlbl Free Stock, Buffer Qty, Required to Produce,
+  then one "Customer Name (SO No.) - Pending" / "... - Reserved" column pair per
+  displayed open Sales Order.
 
-Required to Produce = max(0, (Total Pending - Total Reserved) - Total Avlbl Unreserved Stock + Buffer Qty)
-  i.e. reservations against the displayed SOs net out of BOTH the demand
-  (Pending - Reserved) and the available stock, so you only produce for the
-  genuinely uncovered shortfall plus the buffer.
+  - Pending  = SO Item qty not yet delivered (qty - delivered_qty)
+  - Reserved = qty reserved against that SO via Stock Reservation Entry (docstatus 1)
+  - Total Avlbl Free Stock = on-hand in STOCK_WAREHOUSE minus reservations there.
+      "Unreserved Stock Basis" filter:
+        All Reservations   -> Bin.reserved_qty (any reservation)
+        Only Displayed SOs -> Stock Reservation Entry qty for the shown SOs
+  - Buffer Qty defaults from Item.safety_stock; editable inline (session-only,
+    never written back).
+  - Required to Produce = max(0, (Total Pending - Total Reserved)
+                                  - Total Avlbl Free Stock + Buffer Qty)
 
-NOTE: "Reserved" here relies on Stock Reservation Entry. If that feature isn't in
-active use, this column will read 0 for every SO - the report still works, it just
-won't be able to net out reservations from demand.
+Filters:
+  - FG Item, Customer
+  - Date range (From/To) applied to the Sales Order field chosen by "Date Basis":
+        Document Creation Date       -> transaction_date
+        Delivery Date                -> delivery_date
+        Custom Updated Delivery Date -> custom_updated_delivery_date
+    (falls back to transaction_date if the chosen column doesn't exist)
+  - Unreserved Stock Basis (see above)
+  - Hide Fulfilled SOs: hide the column pair for any SO with no shortfall
+    (reserved >= pending on every line). Purely visual - Required to Produce
+    still considers every open SO.
+
+NOTE: "Reserved" relies on Stock Reservation Entry. If that feature isn't in
+active use, Reserved reads 0 for every SO - the report still works, it just
+won't net reservations out of demand.
 """
 
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate
+from frappe.utils import cint, flt, nowdate
 
 OPEN_SO_STATUSES = ["Draft", "On Hold", "To Deliver and Bill", "To Bill", "To Deliver"]
 
-# Total Avlbl Stock is measured in this single warehouse only (both the on-hand
-# qty and the reservations netted out of it). Change here if the stores
+# Total Avlbl Free Stock is measured in this single warehouse only (both the
+# on-hand qty and the reservations netted out of it). Change here if the stores
 # warehouse is renamed or the report should target a different one.
 STOCK_WAREHOUSE = "Stores - FTPL"
+
+# The custom "updated delivery date" field on Sales Order (from Customize Form).
+CUSTOM_DELIVERY_DATE_FIELD = "custom_updated_delivery_date"
+
+# "Date Basis" filter value -> Sales Order (header) date column it filters on.
+DATE_BASIS_FIELD = {
+	"Document Creation Date": "transaction_date",
+	"Delivery Date": "delivery_date",
+	"Custom Updated Delivery Date": CUSTOM_DELIVERY_DATE_FIELD,
+}
 
 
 @frappe.whitelist()
@@ -119,45 +134,58 @@ def execute(filters=None):
 
 	so_items = get_open_so_items(filters)
 	if not so_items:
-		return get_base_columns(), []
+		return get_summary_columns(), []
 
 	fg_items = sorted(set(row.item_code for row in so_items))
-	open_sos = get_ordered_open_sos(so_items)
+	all_open_sos = get_ordered_open_sos(so_items)
 
 	pending_map = build_pending_map(so_items)
-	reserved_map = get_reserved_map(open_sos)
+	reserved_map = get_reserved_map(all_open_sos)
 	stock_map = get_stock_map(fg_items)
-	stock_reserved_map = get_reserved_in_stock_warehouse_map(open_sos)
-	buffer_map = get_buffer_map(fg_items)
+	stock_reserved_map = get_reserved_in_stock_warehouse_map(all_open_sos)
+	item_map = get_item_map(fg_items)
+	customer_name_map = get_customer_name_map(so_items)
+	so_customer = {row.sales_order: row.customer for row in so_items}
 
-	columns = get_base_columns()
-	for so in open_sos:
+	# "Hide Fulfilled SOs" is visual only: it drops the column pair for SOs that
+	# have no shortfall, but every open SO still counts in the totals below.
+	display_sos = all_open_sos
+	if cint(filters.get("hide_fulfilled")):
+		display_sos = [
+			so for so in all_open_sos
+			if _so_has_shortfall(so, so_items, pending_map, reserved_map)
+		]
+
+	columns = get_summary_columns()
+	for so in display_sos:
+		header = _so_header_label(so, so_customer, customer_name_map)
 		columns.append({
-			"label": _("{0} Pending").format(so),
+			"label": _("{0} - Pending").format(header),
 			"fieldname": "pending_{0}".format(frappe.scrub(so)),
 			"fieldtype": "Float",
-			"width": 110,
+			"width": 140,
 		})
 		columns.append({
-			"label": _("{0} Reserved").format(so),
+			"label": _("{0} - Reserved").format(header),
 			"fieldname": "reserved_{0}".format(frappe.scrub(so)),
 			"fieldtype": "Float",
-			"width": 110,
+			"width": 140,
 		})
 
-	columns += [
-		{"label": _("Total Avlbl Unreserved Stock"), "fieldname": "total_avlbl_stock", "fieldtype": "Float", "width": 180},
-		{"label": _("Buffer Qty"), "fieldname": "buffer_qty", "fieldtype": "Float", "width": 100},
-		{"label": _("Required to Produce"), "fieldname": "required_to_produce", "fieldtype": "Float", "width": 150},
-	]
-
 	data = []
+	total_to_produce = 0.0
+	items_needing = 0
+
 	for item in fg_items:
-		row = {"item_code": item}
+		details = item_map.get(item) or frappe._dict()
+		row = {"item_code": item, "item_name": details.get("item_name")}
+
 		total_pending = 0.0
 		total_reserved = 0.0
-
-		for so in open_sos:
+		# Populate pending/reserved for EVERY open SO (including hidden ones) so
+		# the inline Buffer recompute in the browser sums the same set the server
+		# did. Only the displayed SOs get a column, but all values ride in the row.
+		for so in all_open_sos:
 			p = pending_map.get((so, item), 0.0)
 			r = reserved_map.get((so, item), 0.0)
 			row["pending_{0}".format(frappe.scrub(so))] = p
@@ -165,13 +193,8 @@ def execute(filters=None):
 			total_pending += p
 			total_reserved += r
 
-		# Total Avlbl Unreserved Stock: on-hand in the stores warehouse minus
-		# reservations there. The "unreserved_basis" filter chooses which
-		# reservations to net out:
-		#   - "All Reservations": every reservation in the warehouse
-		#     (Bin.reserved_qty) — truly uncommitted free stock.
-		#   - "Only Displayed SOs": only reservations tied to the Sales Orders
-		#     shown in this report.
+		# Total Avlbl Free Stock: on-hand in the stores warehouse minus
+		# reservations there, per the "unreserved_basis" filter.
 		stock = stock_map.get(item) or frappe._dict()
 		actual_qty = flt(stock.get("actual_qty"))
 		if unreserved_basis == "Only Displayed SOs":
@@ -180,30 +203,54 @@ def execute(filters=None):
 			reserved_from_stock = flt(stock.get("reserved_qty"))
 		total_avlbl_stock = actual_qty - reserved_from_stock
 
-		buffer_qty = buffer_map.get(item, 0.0) or 0.0
-
+		buffer_qty = flt(details.get("safety_stock"))
 		unfulfilled_demand = total_pending - total_reserved
 		required_to_produce = max(0.0, unfulfilled_demand - total_avlbl_stock + buffer_qty)
 
 		row["total_avlbl_stock"] = total_avlbl_stock
 		row["buffer_qty"] = buffer_qty
 		row["required_to_produce"] = required_to_produce
-
 		data.append(row)
 
-	return columns, data
+		total_to_produce += required_to_produce
+		if required_to_produce > 0:
+			items_needing += 1
 
-
-def get_base_columns():
-	return [
+	report_summary = [
 		{
-			"label": _("FG Item"),
-			"fieldname": "item_code",
-			"fieldtype": "Link",
-			"options": "Item",
-			"width": 220,
+			"label": _("Total Qty to Produce"),
+			"value": total_to_produce,
+			"datatype": "Float",
+			"indicator": "Orange" if total_to_produce else "Green",
 		},
+		{"label": _("Items Needing Production"), "value": items_needing, "datatype": "Int"},
+		{"label": _("Open Sales Orders"), "value": len(all_open_sos), "datatype": "Int"},
 	]
+
+	return columns, data, None, None, report_summary
+
+
+def get_summary_columns():
+	"""The item + calculated summary columns, pinned to the left of the report
+	(immediately after the item) so the actionable numbers are seen first."""
+	return [
+		{"label": _("FG Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 150},
+		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 220},
+		{"label": _("Total Avlbl Free Stock"), "fieldname": "total_avlbl_stock", "fieldtype": "Float", "width": 170},
+		{"label": _("Buffer Qty"), "fieldname": "buffer_qty", "fieldtype": "Float", "width": 100},
+		{"label": _("Required to Produce"), "fieldname": "required_to_produce", "fieldtype": "Float", "width": 160},
+	]
+
+
+def _resolve_date_field(date_basis):
+	"""Map the Date Basis filter to a Sales Order column, guarding against a
+	custom field that doesn't exist on this site (would otherwise be invalid
+	SQL). The values come from the fixed DATE_BASIS_FIELD map, so interpolating
+	the result into SQL is safe."""
+	field = DATE_BASIS_FIELD.get(date_basis or "Document Creation Date", "transaction_date")
+	if not frappe.db.has_column("Sales Order", field):
+		return "transaction_date"
+	return field
 
 
 def get_open_so_items(filters):
@@ -217,6 +264,14 @@ def get_open_so_items(filters):
 	if filters.get("customer"):
 		conditions += " AND so.customer = %(customer)s"
 		values["customer"] = filters.get("customer")
+
+	date_field = _resolve_date_field(filters.get("date_basis"))
+	if filters.get("from_date"):
+		conditions += " AND so.{0} >= %(from_date)s".format(date_field)
+		values["from_date"] = filters.get("from_date")
+	if filters.get("to_date"):
+		conditions += " AND so.{0} <= %(to_date)s".format(date_field)
+		values["to_date"] = filters.get("to_date")
 
 	return frappe.db.sql(
 		"""
@@ -232,8 +287,8 @@ def get_open_so_items(filters):
 			AND so.status IN %(statuses)s
 			AND (soi.qty - soi.delivered_qty) > 0
 			{conditions}
-		ORDER BY so.transaction_date ASC, soi.parent ASC
-		""".format(conditions=conditions),
+		ORDER BY so.{date_field} ASC, soi.parent ASC
+		""".format(conditions=conditions, date_field=date_field),
 		values,
 		as_dict=True,
 	)
@@ -257,6 +312,26 @@ def build_pending_map(so_items):
 	return pending_map
 
 
+def _so_has_shortfall(so, so_items, pending_map, reserved_map):
+	"""True if any line on this SO still has pending > reserved (i.e. a real
+	production shortfall). Used by the "Hide Fulfilled SOs" toggle."""
+	for r in so_items:
+		if r.sales_order != so:
+			continue
+		pending = flt(pending_map.get((so, r.item_code), 0.0))
+		reserved = flt(reserved_map.get((so, r.item_code), 0.0))
+		if pending - reserved > 0.0001:
+			return True
+	return False
+
+
+def _so_header_label(so, so_customer, customer_name_map):
+	"""Column header as 'Customer Name (SO No.)'."""
+	customer = so_customer.get(so)
+	name = customer_name_map.get(customer) or customer
+	return "{0} ({1})".format(name, so) if name else so
+
+
 def get_reserved_map(open_sos):
 	if not open_sos:
 		return {}
@@ -264,7 +339,7 @@ def get_reserved_map(open_sos):
 	if not frappe.db.table_exists("Stock Reservation Entry"):
 		return {}
 
-	# ERPNext 15 Stock Reservation Entry has no `against_sales_order` column —
+	# ERPNext 15 Stock Reservation Entry has no `against_sales_order` column -
 	# reservations are stored generically as voucher_type/voucher_no, so a
 	# Sales Order reservation is voucher_type = "Sales Order", voucher_no = <SO>.
 	rows = frappe.db.sql(
@@ -287,9 +362,9 @@ def get_reserved_map(open_sos):
 
 def get_stock_map(fg_items):
 	"""On-hand and Bin-reserved qty per item in STOCK_WAREHOUSE only (not
-	summed across all warehouses). `reserved_qty` here is Bin.reserved_qty —
-	i.e. ALL reservations of any kind in that warehouse — used when the
-	"Total Avlbl Unreserved Stock" basis is All Reservations. Returns
+	summed across all warehouses). `reserved_qty` here is Bin.reserved_qty -
+	i.e. ALL reservations of any kind in that warehouse - used when the
+	"Total Avlbl Free Stock" basis is All Reservations. Returns
 	{item_code: {actual_qty, reserved_qty}}."""
 	if not fg_items:
 		return {}
@@ -313,12 +388,9 @@ def get_stock_map(fg_items):
 
 def get_reserved_in_stock_warehouse_map(open_sos):
 	"""Qty reserved against the displayed (open) Sales Orders, restricted to
-	STOCK_WAREHOUSE. This is what gets netted out of that warehouse's on-hand
-	qty to give Total Avlbl Stock — i.e. stock physically in the stores that is
-	already earmarked for the Sales Orders shown in this report. Returns
-	{item_code: reserved_qty}. Distinct from get_reserved_map, which is
-	per-SO and across all warehouses (used for the Reserved columns and the
-	demand side of Required to Produce)."""
+	STOCK_WAREHOUSE. Netted out of that warehouse's on-hand qty when the
+	Unreserved Stock Basis is "Only Displayed SOs". Returns
+	{item_code: reserved_qty}."""
 	if not open_sos or not frappe.db.table_exists("Stock Reservation Entry"):
 		return {}
 
@@ -340,17 +412,27 @@ def get_reserved_in_stock_warehouse_map(open_sos):
 	return {r.item_code: r.reserved_qty or 0.0 for r in rows}
 
 
-def get_buffer_map(fg_items):
+def get_customer_name_map(so_items):
+	"""{customer_id: customer_name} for the customers on the shown SOs, used to
+	build 'Customer Name (SO No.)' column headers."""
+	customers = sorted({r.customer for r in so_items if r.customer})
+	if not customers:
+		return {}
+	rows = frappe.db.sql(
+		"""SELECT name, customer_name FROM `tabCustomer` WHERE name IN %(c)s""",
+		{"c": customers},
+		as_dict=True,
+	)
+	return {r.name: r.customer_name for r in rows}
+
+
+def get_item_map(fg_items):
+	"""{item_code: {item_name, safety_stock}} for the FG items in the report."""
 	if not fg_items:
 		return {}
-
 	rows = frappe.db.sql(
-		"""
-		SELECT name AS item_code, safety_stock
-		FROM `tabItem`
-		WHERE name IN %(items)s
-		""",
+		"""SELECT name AS item_code, item_name, safety_stock FROM `tabItem` WHERE name IN %(items)s""",
 		{"items": fg_items},
 		as_dict=True,
 	)
-	return {r.item_code: r.safety_stock or 0.0 for r in rows}
+	return {r.item_code: r for r in rows}

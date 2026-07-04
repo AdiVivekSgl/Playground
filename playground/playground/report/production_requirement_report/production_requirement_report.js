@@ -34,6 +34,13 @@ frappe.query_reports["Production Requirement Report"] = {
 			options: "Customer",
 		},
 		{
+			fieldname: "include_draft",
+			label: __("Include Draft SOs"),
+			fieldtype: "Check",
+			default: 0,
+			// Off: submitted SOs only. On: also include Draft (docstatus 0) SOs.
+		},
+		{
 			fieldname: "date_basis",
 			label: __("Date Basis"),
 			fieldtype: "Select",
@@ -56,7 +63,7 @@ frappe.query_reports["Production Requirement Report"] = {
 			label: __("Unreserved Stock Basis"),
 			fieldtype: "Select",
 			options: ["All Reservations", "Only Displayed SOs"].join("\n"),
-			default: "All Reservations",
+			default: "Only Displayed SOs",
 			// What "Total Avlbl Free Stock" nets out of the stores warehouse
 			// on-hand: every reservation (truly free stock), or only reservations
 			// tied to the Sales Orders shown here.
@@ -71,16 +78,26 @@ frappe.query_reports["Production Requirement Report"] = {
 		},
 	],
 
-	// Cell formatting for readability: highlight Required to Produce when there's
-	// a real shortfall, and flag negative free stock in red.
+	// Cell formatting for readability:
+	//  - highlight Required to Produce when there's a real shortfall,
+	//  - flag negative free stock in red,
+	//  - tint the per-SO columns: light grey for Pending, light pink for Reserved,
+	//    so the alternating pairs are easy to tell apart.
 	formatter(value, row, column, data, default_formatter) {
 		let formatted = default_formatter(value, row, column, data);
-		if (!data) return formatted;
+		const fieldname = column.fieldname || "";
 
-		if (column.fieldname === "required_to_produce" && flt(data.required_to_produce) > 0) {
+		if (data && fieldname === "required_to_produce" && flt(data.required_to_produce) > 0) {
 			formatted = `<span style="color:#b02a37;font-weight:600;">${formatted}</span>`;
-		} else if (column.fieldname === "total_avlbl_stock" && flt(data.total_avlbl_stock) < 0) {
+		} else if (data && fieldname === "total_avlbl_stock" && flt(data.total_avlbl_stock) < 0) {
 			formatted = `<span style="color:#b02a37;">${formatted}</span>`;
+		}
+
+		if (fieldname.indexOf("pending_") === 0) {
+			return `<div style="background-color:#f1f3f5;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
+		}
+		if (fieldname.indexOf("reserved_") === 0) {
+			return `<div style="background-color:#fde2e7;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
 		}
 		return formatted;
 	},

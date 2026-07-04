@@ -10,8 +10,11 @@ Per open SO       : a "<SO> Pending" / "<SO> Reserved" column pair
                      - Pending  = SO Item qty not yet delivered (qty - delivered_qty)
                      - Reserved = qty already reserved against that specific SO via
                                   Stock Reservation Entry (docstatus = 1)
-Near the end      : Total Avlbl Stock (free/unreserved stock across all warehouses,
-                     from Bin.actual_qty - Bin.reserved_qty), Buffer Qty
+Near the end      : Total Avlbl Stock (on-hand qty in the STOCK_WAREHOUSE only,
+                     minus the qty reserved against the displayed open Sales Orders
+                     in that same warehouse: Bin.actual_qty[STOCK_WAREHOUSE] -
+                     Stock Reservation Entry qty for the shown SOs[STOCK_WAREHOUSE]),
+                     Buffer Qty
                      (defaults from Item.safety_stock on load; editable inline in the
                      report grid, but edits are session-only scratch values - they
                      recompute Required to Produce in the browser and are never written
@@ -30,6 +33,11 @@ from frappe import _
 from frappe.utils import flt, nowdate
 
 OPEN_SO_STATUSES = ["Draft", "On Hold", "To Deliver and Bill", "To Bill", "To Deliver"]
+
+# Total Avlbl Stock is measured in this single warehouse only (both the on-hand
+# qty and the reservations netted out of it). Change here if the stores
+# warehouse is renamed or the report should target a different one.
+STOCK_WAREHOUSE = "Stores - FTPL"
 
 
 @frappe.whitelist()
@@ -113,6 +121,7 @@ def execute(filters=None):
 	pending_map = build_pending_map(so_items)
 	reserved_map = get_reserved_map(open_sos)
 	stock_map = get_stock_map(fg_items)
+	stock_reserved_map = get_reserved_in_stock_warehouse_map(open_sos)
 	buffer_map = get_buffer_map(fg_items)
 
 	columns = get_base_columns()
@@ -150,10 +159,11 @@ def execute(filters=None):
 			total_pending += p
 			total_reserved += r
 
-		stock = stock_map.get(item, {})
-		actual_qty = stock.get("actual_qty", 0.0) or 0.0
-		bin_reserved_qty = stock.get("reserved_qty", 0.0) or 0.0
-		total_avlbl_stock = actual_qty - bin_reserved_qty
+		# On-hand in the stores warehouse, minus what's reserved there against
+		# the Sales Orders shown in this report.
+		actual_qty = stock_map.get(item, 0.0) or 0.0
+		reserved_in_store = stock_reserved_map.get(item, 0.0) or 0.0
+		total_avlbl_stock = actual_qty - reserved_in_store
 
 		buffer_qty = buffer_map.get(item, 0.0) or 0.0
 
@@ -261,6 +271,8 @@ def get_reserved_map(open_sos):
 
 
 def get_stock_map(fg_items):
+	"""On-hand qty per item in STOCK_WAREHOUSE only (not summed across all
+	warehouses). Returns {item_code: actual_qty}."""
 	if not fg_items:
 		return {}
 
@@ -268,16 +280,45 @@ def get_stock_map(fg_items):
 		"""
 		SELECT
 			item_code,
-			SUM(actual_qty) AS actual_qty,
-			SUM(reserved_qty) AS reserved_qty
+			SUM(actual_qty) AS actual_qty
 		FROM `tabBin`
 		WHERE item_code IN %(items)s
+			AND warehouse = %(warehouse)s
 		GROUP BY item_code
 		""",
-		{"items": fg_items},
+		{"items": fg_items, "warehouse": STOCK_WAREHOUSE},
 		as_dict=True,
 	)
-	return {r.item_code: r for r in rows}
+	return {r.item_code: r.actual_qty or 0.0 for r in rows}
+
+
+def get_reserved_in_stock_warehouse_map(open_sos):
+	"""Qty reserved against the displayed (open) Sales Orders, restricted to
+	STOCK_WAREHOUSE. This is what gets netted out of that warehouse's on-hand
+	qty to give Total Avlbl Stock — i.e. stock physically in the stores that is
+	already earmarked for the Sales Orders shown in this report. Returns
+	{item_code: reserved_qty}. Distinct from get_reserved_map, which is
+	per-SO and across all warehouses (used for the Reserved columns and the
+	demand side of Required to Produce)."""
+	if not open_sos or not frappe.db.table_exists("Stock Reservation Entry"):
+		return {}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			sre.item_code,
+			SUM(sre.reserved_qty) AS reserved_qty
+		FROM `tabStock Reservation Entry` sre
+		WHERE sre.docstatus = 1
+			AND sre.voucher_type = 'Sales Order'
+			AND sre.voucher_no IN %(sos)s
+			AND sre.warehouse = %(warehouse)s
+		GROUP BY sre.item_code
+		""",
+		{"sos": open_sos, "warehouse": STOCK_WAREHOUSE},
+		as_dict=True,
+	)
+	return {r.item_code: r.reserved_qty or 0.0 for r in rows}
 
 
 def get_buffer_map(fg_items):

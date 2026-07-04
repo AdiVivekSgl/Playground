@@ -19,6 +19,112 @@ function prr_recompute_required_to_produce(row_values, new_buffer_qty) {
 	return Math.max(0, unfulfilled_demand - total_avlbl_stock + flt(new_buffer_qty));
 }
 
+const PRR_CHARTJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
+
+// Draw the top-20 "Pending Value (bars) + Pending Qty (line)" dual-axis chart.
+// The server embeds the series (base64 JSON) on a canvas in the report message;
+// frappe-charts can't do a second y-axis, so we render it with Chart.js here.
+function prr_render_combo_chart() {
+	const canvas = document.getElementById("prr-combo-chart");
+	if (!canvas || !canvas.dataset.series) return;
+
+	let series;
+	try {
+		series = JSON.parse(decodeURIComponent(escape(atob(canvas.dataset.series))));
+	} catch (e) {
+		return;
+	}
+	if (!series.labels || !series.labels.length) return;
+
+	const draw = () => {
+		if (!window.Chart) return;
+		if (window._prrCombo) {
+			try {
+				window._prrCombo.destroy();
+			} catch (e) {}
+		}
+		const ink =
+			getComputedStyle(document.documentElement).getPropertyValue("--text-muted") || "#898781";
+		const dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+		const grid = dark ? "#2c2c2a" : "#e1e0d9";
+
+		window._prrCombo = new Chart(canvas, {
+			data: {
+				labels: series.labels,
+				datasets: [
+					{
+						type: "bar",
+						label: __("Pending value"),
+						data: series.value,
+						yAxisID: "yValue",
+						backgroundColor: "#2a78d6",
+						borderRadius: 4,
+						order: 2,
+						categoryPercentage: 0.7,
+						barPercentage: 0.9,
+					},
+					{
+						type: "line",
+						label: __("Pending qty"),
+						data: series.qty,
+						yAxisID: "yQty",
+						borderColor: "#eb6834",
+						backgroundColor: "#eb6834",
+						borderWidth: 2,
+						pointRadius: 3,
+						pointHoverRadius: 5,
+						tension: 0.3,
+						fill: false,
+						order: 1,
+					},
+				],
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				interaction: { mode: "index", intersect: false },
+				plugins: {
+					legend: { display: false },
+					tooltip: {
+						callbacks: {
+							label: (c) =>
+								c.dataset.yAxisID === "yValue"
+									? "  " + __("Value") + ": " + Math.round(c.parsed.y).toLocaleString()
+									: "  " + __("Qty") + ": " + Math.round(c.parsed.y).toLocaleString(),
+						},
+					},
+				},
+				scales: {
+					x: {
+						grid: { display: false },
+						ticks: { color: ink, font: { size: 11 }, maxRotation: 60, minRotation: 55, autoSkip: false },
+					},
+					yValue: {
+						position: "left",
+						beginAtZero: true,
+						grid: { color: grid },
+						title: { display: true, text: __("Pending value"), color: ink, font: { size: 12 } },
+						ticks: { color: ink, font: { size: 11 }, callback: (v) => Math.round(v / 1000) + "k" },
+					},
+					yQty: {
+						position: "right",
+						beginAtZero: true,
+						grid: { drawOnChartArea: false },
+						title: { display: true, text: __("Pending qty"), color: ink, font: { size: 12 } },
+						ticks: { color: ink, font: { size: 11 }, callback: (v) => Math.round(v).toLocaleString() },
+					},
+				},
+			},
+		});
+	};
+
+	if (window.Chart) {
+		draw();
+	} else {
+		frappe.require(PRR_CHARTJS_CDN, draw);
+	}
+}
+
 frappe.query_reports["Production Requirement Report"] = {
 	filters: [
 		{
@@ -100,6 +206,12 @@ frappe.query_reports["Production Requirement Report"] = {
 			return `<div style="background-color:#fde2e7;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
 		}
 		return formatted;
+	},
+
+	// Redraw the top-20 dual-axis chart after every run (the report message,
+	// which carries the chart's data, is re-rendered on each run).
+	after_datatable_render() {
+		prr_render_combo_chart();
 	},
 
 	// Native Script Report columns hard-code editable:false when the DataTable is built

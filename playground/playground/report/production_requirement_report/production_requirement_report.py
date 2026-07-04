@@ -16,8 +16,9 @@ Layout (left -> right):
       "Unreserved Stock Basis" filter:
         All Reservations   -> Bin.reserved_qty (any reservation)
         Only Displayed SOs -> Stock Reservation Entry qty for the shown SOs
-  - Buffer Qty defaults from Item.safety_stock; editable inline (session-only,
-    never written back).
+  - Buffer Qty defaults from Item.safety_stock and is editable inline; an edit
+    recomputes Required to Produce AND is saved back to Item.safety_stock
+    (see update_buffer_qty, guarded by Item write permission).
   - Required to Produce = max(0, (Total Pending - Total Reserved)
                                   - Total Avlbl Free Stock + Buffer Qty)
 
@@ -58,6 +59,23 @@ DATE_BASIS_FIELD = {
 	"Delivery Date": "delivery_date",
 	"Custom Updated Delivery Date": CUSTOM_DELIVERY_DATE_FIELD,
 }
+
+
+@frappe.whitelist()
+def update_buffer_qty(item_code, buffer_qty):
+	"""Persist an inline Buffer Qty edit back to Item.safety_stock. Guarded by
+	Item write permission. Uses db.set_value (single field, no full Item
+	revalidation) since safety_stock is a plain numeric field."""
+	if not frappe.has_permission("Item", "write", doc=item_code):
+		frappe.throw(
+			_("You are not permitted to edit Item {0}.").format(item_code),
+			frappe.PermissionError,
+		)
+	buffer_qty = flt(buffer_qty)
+	if buffer_qty < 0:
+		frappe.throw(_("Buffer Qty cannot be negative."))
+	frappe.db.set_value("Item", item_code, "safety_stock", buffer_qty)
+	return buffer_qty
 
 
 @frappe.whitelist()

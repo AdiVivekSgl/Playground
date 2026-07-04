@@ -33,6 +33,16 @@ frappe.query_reports["Production Requirement Report"] = {
 			fieldtype: "Link",
 			options: "Customer",
 		},
+		{
+			fieldname: "unreserved_basis",
+			label: __("Unreserved Stock Basis"),
+			fieldtype: "Select",
+			options: ["All Reservations", "Only Displayed SOs"].join("\n"),
+			default: "All Reservations",
+			// Controls what "Total Avlbl Unreserved Stock" nets out of the
+			// stores warehouse on-hand: every reservation (truly free stock),
+			// or only reservations tied to the Sales Orders shown here.
+		},
 	],
 
 	// Native Script Report columns hard-code editable:false when the DataTable is built

@@ -10,10 +10,12 @@ Per open SO       : a "<SO> Pending" / "<SO> Reserved" column pair
                      - Pending  = SO Item qty not yet delivered (qty - delivered_qty)
                      - Reserved = qty already reserved against that specific SO via
                                   Stock Reservation Entry (docstatus = 1)
-Near the end      : Total Avlbl Stock (on-hand qty in the STOCK_WAREHOUSE only,
-                     minus the qty reserved against the displayed open Sales Orders
-                     in that same warehouse: Bin.actual_qty[STOCK_WAREHOUSE] -
-                     Stock Reservation Entry qty for the shown SOs[STOCK_WAREHOUSE]),
+Near the end      : Total Avlbl Unreserved Stock (on-hand qty in STOCK_WAREHOUSE
+                     only, minus reservations there. The "Unreserved Stock Basis"
+                     filter chooses which reservations to net out:
+                       - All Reservations  -> Bin.reserved_qty (any reservation)
+                       - Only Displayed SOs -> Stock Reservation Entry qty for the
+                         Sales Orders shown in this report),
                      Buffer Qty
                      (defaults from Item.safety_stock on load; editable inline in the
                      report grid, but edits are session-only scratch values - they
@@ -21,7 +23,10 @@ Near the end      : Total Avlbl Stock (on-hand qty in the STOCK_WAREHOUSE only,
                      back to the Item master. Reload/refresh the report to reset.)
 Rightmost         : Required to Produce (calculated)
 
-Required to Produce = max(0, (Total Pending - Total Reserved) - Total Avlbl Stock + Buffer Qty)
+Required to Produce = max(0, (Total Pending - Total Reserved) - Total Avlbl Unreserved Stock + Buffer Qty)
+  i.e. reservations against the displayed SOs net out of BOTH the demand
+  (Pending - Reserved) and the available stock, so you only produce for the
+  genuinely uncovered shortfall plus the buffer.
 
 NOTE: "Reserved" here relies on Stock Reservation Entry. If that feature isn't in
 active use, this column will read 0 for every SO - the report still works, it just
@@ -110,6 +115,7 @@ def create_production_plan(items):
 
 def execute(filters=None):
 	filters = filters or {}
+	unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
 
 	so_items = get_open_so_items(filters)
 	if not so_items:
@@ -140,7 +146,7 @@ def execute(filters=None):
 		})
 
 	columns += [
-		{"label": _("Total Avlbl Stock"), "fieldname": "total_avlbl_stock", "fieldtype": "Float", "width": 140},
+		{"label": _("Total Avlbl Unreserved Stock"), "fieldname": "total_avlbl_stock", "fieldtype": "Float", "width": 180},
 		{"label": _("Buffer Qty"), "fieldname": "buffer_qty", "fieldtype": "Float", "width": 100},
 		{"label": _("Required to Produce"), "fieldname": "required_to_produce", "fieldtype": "Float", "width": 150},
 	]
@@ -159,11 +165,20 @@ def execute(filters=None):
 			total_pending += p
 			total_reserved += r
 
-		# On-hand in the stores warehouse, minus what's reserved there against
-		# the Sales Orders shown in this report.
-		actual_qty = stock_map.get(item, 0.0) or 0.0
-		reserved_in_store = stock_reserved_map.get(item, 0.0) or 0.0
-		total_avlbl_stock = actual_qty - reserved_in_store
+		# Total Avlbl Unreserved Stock: on-hand in the stores warehouse minus
+		# reservations there. The "unreserved_basis" filter chooses which
+		# reservations to net out:
+		#   - "All Reservations": every reservation in the warehouse
+		#     (Bin.reserved_qty) — truly uncommitted free stock.
+		#   - "Only Displayed SOs": only reservations tied to the Sales Orders
+		#     shown in this report.
+		stock = stock_map.get(item) or frappe._dict()
+		actual_qty = flt(stock.get("actual_qty"))
+		if unreserved_basis == "Only Displayed SOs":
+			reserved_from_stock = stock_reserved_map.get(item, 0.0) or 0.0
+		else:  # "All Reservations" (default)
+			reserved_from_stock = flt(stock.get("reserved_qty"))
+		total_avlbl_stock = actual_qty - reserved_from_stock
 
 		buffer_qty = buffer_map.get(item, 0.0) or 0.0
 
@@ -271,8 +286,11 @@ def get_reserved_map(open_sos):
 
 
 def get_stock_map(fg_items):
-	"""On-hand qty per item in STOCK_WAREHOUSE only (not summed across all
-	warehouses). Returns {item_code: actual_qty}."""
+	"""On-hand and Bin-reserved qty per item in STOCK_WAREHOUSE only (not
+	summed across all warehouses). `reserved_qty` here is Bin.reserved_qty —
+	i.e. ALL reservations of any kind in that warehouse — used when the
+	"Total Avlbl Unreserved Stock" basis is All Reservations. Returns
+	{item_code: {actual_qty, reserved_qty}}."""
 	if not fg_items:
 		return {}
 
@@ -280,7 +298,8 @@ def get_stock_map(fg_items):
 		"""
 		SELECT
 			item_code,
-			SUM(actual_qty) AS actual_qty
+			SUM(actual_qty) AS actual_qty,
+			SUM(reserved_qty) AS reserved_qty
 		FROM `tabBin`
 		WHERE item_code IN %(items)s
 			AND warehouse = %(warehouse)s
@@ -289,7 +308,7 @@ def get_stock_map(fg_items):
 		{"items": fg_items, "warehouse": STOCK_WAREHOUSE},
 		as_dict=True,
 	)
-	return {r.item_code: r.actual_qty or 0.0 for r in rows}
+	return {r.item_code: r for r in rows}
 
 
 def get_reserved_in_stock_warehouse_map(open_sos):

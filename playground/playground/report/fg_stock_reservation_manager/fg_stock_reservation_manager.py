@@ -21,9 +21,13 @@ Actions (see the client script):
     reservation path.
   - Cancel Reservations: cancel the SREs on the selected lines, releasing stock.
   - Ready to Dispatch / Possible to Complete: view filters that narrow the
-    report to Sales Orders where EVERY line meets a condition -
-      Ready to Dispatch    -> Short to Complete == 0 on every line
-      Possible to Complete -> Short to Complete <  Item Free Stock on every line
+    report to qualifying Sales Orders -
+      Ready to Dispatch    -> Short to Complete == 0 on every line (nothing
+                              left to reserve)
+      Possible to Complete -> Short to Complete <= Item Free Stock on every
+                              line (every shortfall is coverable by a
+                              reservation), excluding SOs that already qualify
+                              for Ready to Dispatch
     Both ignore "Only lines with unreserved pending" while active, since they
     need to see every line of a SO to judge whether all of them qualify.
 
@@ -152,19 +156,28 @@ def execute(filters=None):
 
 	# Evaluate per-SO qualification across ALL of that SO's lines (only_unreserved
 	# was forced off above, so `data` already holds every line for each SO here).
-	#   ready_to_dispatch   -> Short to Complete == 0 on every line
-	#   possible_to_complete -> Short to Complete <  Item Free Stock on every line
+	#   ready_to_dispatch    -> Short to Complete == 0 on every line (nothing left
+	#                           to reserve; already good to go)
+	#   possible_to_complete -> Short to Complete <= Item Free Stock on every line
+	#                           (every shortfall is coverable by a reservation),
+	#                           AND at least one line still has a shortfall — SOs
+	#                           already fully covered belong to Ready to Dispatch,
+	#                           not here.
 	so_ok = {}
 	for row in data:
 		so = row["sales_order"]
 		short = flt(row["short_to_complete"])
 		free = flt(row["item_free_stock"])
-		prev = so_ok.setdefault(so, {"ready": True, "possible": True})
+		prev = so_ok.setdefault(so, {"ready": True, "coverable": True})
 		prev["ready"] = prev["ready"] and short <= 0.0001
-		prev["possible"] = prev["possible"] and short < free
+		prev["coverable"] = prev["coverable"] and short <= free
 
-	key = "ready" if view_mode == "ready_to_dispatch" else "possible"
-	qualifying_sos = {so for so, flags in so_ok.items() if flags[key]}
+	if view_mode == "ready_to_dispatch":
+		qualifying_sos = {so for so, flags in so_ok.items() if flags["ready"]}
+	else:
+		qualifying_sos = {
+			so for so, flags in so_ok.items() if flags["coverable"] and not flags["ready"]
+		}
 	return get_columns(), [row for row in data if row["sales_order"] in qualifying_sos]
 
 

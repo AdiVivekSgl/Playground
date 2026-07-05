@@ -46,6 +46,9 @@ frappe.query_reports["JIT Production Planning Report"] = {
 			label: __("Raw Material Warehouse"),
 			fieldtype: "Link",
 			options: "Warehouse",
+			// Matches STOCK_WAREHOUSE in production_requirement_report.py — the
+			// same FG warehouse the FG Stock Reservation Manager reserves against.
+			default: "Stores - FTPL",
 			get_query: function () {
 				return { filters: { company: frappe.query_report.get_filter_value("company") } };
 			},

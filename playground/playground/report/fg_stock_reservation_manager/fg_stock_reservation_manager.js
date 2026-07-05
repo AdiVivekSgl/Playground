@@ -96,6 +96,25 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 	},
 
 	onload(report) {
+		// ── Run the JIT Production Planning Report for this same filtered view ──
+		report.page.add_inner_button(
+			__("Run JIT Production Planning Report"),
+			() => {
+				const values = frappe.query_report.get_filter_values();
+				frappe.set_route("query-report", "JIT Production Planning Report").then(() => {
+					// JIT Production Planning Report shares this report's filter
+					// fieldnames (item_code, customer, sales_order, date_basis,
+					// from_date, to_date, only_unreserved, unreserved_basis), so its
+					// Order Qty / Available match what's on screen here. It also has
+					// its own extra filters (company, raw_material_warehouse,
+					// include_subassembly_raw_materials) which are left at their
+					// defaults since this view has no equivalents.
+					frappe.query_report.set_filter_value(values);
+				});
+			},
+			__("Reports")
+		);
+
 		// ── Bulk selection by SO / Item (drives both Create and Cancel) ──────
 		report.page.add_inner_button(
 			__("Select by SO / Item"),

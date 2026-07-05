@@ -22,10 +22,14 @@ recomputing Bin/Stock Reservation Entry logic itself. FGSRM's reservable_now
 is already FIFO-capped at each item's free stock (see that module), so simply
 summing it per item cannot double count stock.
 
-From there, downstream logic mirrors the standard Production Planning Report:
-BOM explosion (BOM Item, or BOM Explosion Item when "Include Sub-assembly Raw
-Materials" is checked) for required qty per raw material, and Bin lookups to
-allot available raw-material stock - same "first row of a group carries the FG
+From there, downstream logic mirrors the standard Production Planning Report,
+with one deliberate change: Required Qty is driven by the SHORTFALL
+(Order Qty - Available), not the full Order Qty, since the Available portion
+is already covered by FG stock/reservations and needs no raw material. BOM
+explosion (BOM Item, or BOM Explosion Item when "Include Sub-assembly Raw
+Materials" is checked) turns that shortfall into required qty per raw
+material, and Bin lookups allot available raw-material stock - same "first row
+of a group carries the FG
 columns, later rows blank" layout and red-highlight-on-shortage formatting as
 the standard report and its manual-entry twin (Production Plan Shortage
 Simulator), which this was scaffolded from.
@@ -224,8 +228,13 @@ class JITProductionPlanningReport:
 	def update_raw_materials(self, data, key):
 		self.index = 0
 
+		# Required Qty is driven by the SHORTFALL (Order Qty - Available), not
+		# the full Order Qty - Available FG stock/reservations already cover
+		# that portion of the order, so no extra raw material is needed for it.
+		shortfall_qty = max(0.0, flt(data.qty_to_manufacture) - flt(data.available_qty))
+
 		for d in self.raw_materials_dict.get(key):
-			d.required_qty = d.required_qty_per_unit * data.qty_to_manufacture
+			d.required_qty = d.required_qty_per_unit * shortfall_qty
 
 			warehouses = self.mrp_warehouses or []
 			item_details = self.item_details.get(d.item_code) if hasattr(self, "item_details") else None

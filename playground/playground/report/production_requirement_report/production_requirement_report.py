@@ -37,6 +37,11 @@ Filters:
 NOTE: "Reserved" relies on Stock Reservation Entry. If that feature isn't in
 active use, Reserved reads 0 for every SO - the report still works, it just
 won't net reservations out of demand.
+
+Summary card "Production COGS" = Σ over FG items of (Required to Produce x
+Item's inventory/stock valuation rate in STOCK_WAREHOUSE) - the cost basis of
+what still needs to be manufactured, as distinct from "Pending Net Total"
+(sale value, base_rate).
 """
 
 import base64
@@ -365,6 +370,7 @@ def execute(filters=None):
 	data = []
 	total_to_produce = 0.0
 	items_needing = 0
+	production_cogs = 0.0
 
 	for item in fg_items:
 		details = item_map.get(item) or frappe._dict()
@@ -406,11 +412,16 @@ def execute(filters=None):
 		if required_to_produce > 0:
 			items_needing += 1
 
+		# Production COGS: itemwise qty requiring production x inventory
+		# (stock valuation) rate - the cost basis of what still needs to be
+		# manufactured, as opposed to Pending Net Total (sale value).
+		production_cogs += required_to_produce * flt(stock.get("valuation_rate"))
+
 	# SO-value metrics for the summary cards + the "Top 20 SOs by Pending Value
 	# & Qty" combination chart. Pending value = pending_qty * base_rate (company
 	# currency), pending qty = qty - delivered_qty, both summed per SO.
-	total_pending_value, production_value, multi_so_customers, top_sos = _value_metrics(
-		so_items, so_customer, pending_map, reserved_map
+	total_pending_value, multi_so_customers, top_sos = _value_metrics(
+		so_items, so_customer, reserved_map
 	)
 
 	report_summary = [
@@ -420,7 +431,7 @@ def execute(filters=None):
 			"datatype": "Float",
 			"indicator": "Orange" if total_to_produce else "Green",
 		},
-		{"label": _("Production Value (Pending − Reserved)"), "value": production_value, "datatype": "Currency"},
+		{"label": _("Production COGS"), "value": production_cogs, "datatype": "Currency"},
 		{"label": _("Pending Net Total (Displayed SOs)"), "value": total_pending_value, "datatype": "Currency"},
 		{"label": _("Customers with >1 Open SO"), "value": multi_so_customers, "datatype": "Int"},
 		{"label": _("Items Needing Production"), "value": items_needing, "datatype": "Int"},
@@ -547,13 +558,10 @@ def _so_header_label(so, so_customer, customer_name_map):
 	return "{0} ({1})".format(name, so) if name else so
 
 
-def _value_metrics(so_items, so_customer, pending_map, reserved_map):
-	"""Returns (total_pending_value, production_value, multi_so_customer_count,
-	top_sos) where:
+def _value_metrics(so_items, so_customer, reserved_map):
+	"""Returns (total_pending_value, multi_so_customer_count, top_sos) where:
 	  - total_pending_value = Σ pending_qty * rate over every displayed SO line
 	    (`rate` is base_rate — company currency)
-	  - production_value = Σ max(0, pending_qty - reserved_qty) * rate over every
-	    (SO, item) — the value of what actually needs producing
 	  - multi_so_customer_count = customers with more than one open SO here
 	  - top_sos = [(sales_order, pending_value, pending_qty, produce_qty), ...]
 	    top 20 SOs by pending value, where produce_qty = max(0, SO total pending
@@ -561,12 +569,10 @@ def _value_metrics(so_items, so_customer, pending_map, reserved_map):
 	"""
 	so_pending_value = {}
 	so_pending_qty = {}
-	rate_map = {}
 	for r in so_items:
 		so = r.sales_order
 		so_pending_value[so] = so_pending_value.get(so, 0.0) + flt(r.pending_qty) * flt(r.rate)
 		so_pending_qty[so] = so_pending_qty.get(so, 0.0) + flt(r.pending_qty)
-		rate_map[(so, r.item_code)] = flt(r.rate)
 	total_pending_value = sum(so_pending_value.values())
 
 	# Chart line "Qty to produce" per SO = (pending − reserved) for that SO,
@@ -579,14 +585,6 @@ def _value_metrics(so_items, so_customer, pending_map, reserved_map):
 		for so in so_pending_qty
 	}
 
-	# Production Value card: value still to produce, netted per (SO, item) and
-	# clamped there (an over-reserved line contributes 0, never a negative).
-	production_value = 0.0
-	for (so, item), pending in pending_map.items():
-		net = flt(pending) - flt(reserved_map.get((so, item), 0.0))
-		if net > 0:
-			production_value += net * rate_map.get((so, item), 0.0)
-
 	customer_sos = {}
 	for so, customer in so_customer.items():
 		customer_sos.setdefault(customer, set()).add(so)
@@ -597,7 +595,7 @@ def _value_metrics(so_items, so_customer, pending_map, reserved_map):
 		(so, value, so_pending_qty.get(so, 0.0), so_produce_qty.get(so, 0.0))
 		for so, value in ranked
 	]
-	return total_pending_value, production_value, multi_so_customers, top_sos
+	return total_pending_value, multi_so_customers, top_sos
 
 
 def _combo_chart_message(top_sos, so_customer, customer_name_map):
@@ -660,11 +658,13 @@ def get_reserved_map(open_sos):
 
 
 def get_stock_map(fg_items):
-	"""On-hand and Bin-reserved qty per item in STOCK_WAREHOUSE only (not
-	summed across all warehouses). `reserved_qty` here is Bin.reserved_qty -
-	i.e. ALL reservations of any kind in that warehouse - used when the
-	"Total Avlbl Free Stock" basis is All Reservations. Returns
-	{item_code: {actual_qty, reserved_qty}}."""
+	"""On-hand, Bin-reserved qty, and valuation rate per item in STOCK_WAREHOUSE
+	only (not summed across all warehouses). `reserved_qty` here is
+	Bin.reserved_qty - i.e. ALL reservations of any kind in that warehouse -
+	used when the "Total Avlbl Free Stock" basis is All Reservations.
+	`valuation_rate` is the item's inventory (stock valuation) rate in that
+	warehouse, used for the Production COGS summary card. Returns
+	{item_code: {actual_qty, reserved_qty, valuation_rate}}."""
 	if not fg_items:
 		return {}
 
@@ -673,7 +673,8 @@ def get_stock_map(fg_items):
 		SELECT
 			item_code,
 			SUM(actual_qty) AS actual_qty,
-			SUM(reserved_qty) AS reserved_qty
+			SUM(reserved_qty) AS reserved_qty,
+			MAX(valuation_rate) AS valuation_rate
 		FROM `tabBin`
 		WHERE item_code IN %(items)s
 			AND warehouse = %(warehouse)s

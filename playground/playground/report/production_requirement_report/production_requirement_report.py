@@ -99,12 +99,18 @@ def create_production_plan(filters=None):
 	if not company:
 		frappe.throw(_("No default Company found. Please set one before creating a Production Plan."))
 
+	# "Link Sales Orders in Plan" toggle: on -> one po_items row per (item, SO)
+	# plus an unlinked buffer row; off -> one simplified row per item carrying the
+	# item's whole Required to Produce, no SO linkage. Both totals are identical.
+	link_sos = cint(filters.get("link_sales_orders"))
+
 	plan_rows, sales_orders = _compute_plan_rows(filters)
 
 	pp = frappe.new_doc("Production Plan")
 	pp.company = company
-	for so in sales_orders:
-		pp.append("sales_orders", so)
+	if link_sos:
+		for so in sales_orders:
+			pp.append("sales_orders", so)
 
 	skipped = []
 	for pr in plan_rows:
@@ -112,34 +118,49 @@ def create_production_plan(filters=None):
 			skipped.append(pr.item_code)
 			continue
 
-		for so, so_item, qty in pr.so_rows:
-			if flt(qty) <= 0:
-				continue
-			pp.append(
-				"po_items",
-				{
-					"item_code": pr.item_code,
-					"bom_no": pr.bom_no,
-					"planned_qty": qty,
-					"planned_start_date": nowdate(),
-					"stock_uom": pr.stock_uom,
-					"sales_order": so,
-					"sales_order_item": so_item,
-				},
-			)
+		if link_sos:
+			for so, so_item, qty in pr.so_rows:
+				if flt(qty) <= 0:
+					continue
+				pp.append(
+					"po_items",
+					{
+						"item_code": pr.item_code,
+						"bom_no": pr.bom_no,
+						"planned_qty": qty,
+						"planned_start_date": nowdate(),
+						"stock_uom": pr.stock_uom,
+						"sales_order": so,
+						"sales_order_item": so_item,
+					},
+				)
 
-		if flt(pr.buffer_qty) > 0:
-			pp.append(
-				"po_items",
-				{
-					"item_code": pr.item_code,
-					"bom_no": pr.bom_no,
-					"planned_qty": pr.buffer_qty,
-					"planned_start_date": nowdate(),
-					"stock_uom": pr.stock_uom,
-					"description": _("Buffer / safety stock (not linked to a Sales Order)"),
-				},
-			)
+			if flt(pr.buffer_qty) > 0:
+				pp.append(
+					"po_items",
+					{
+						"item_code": pr.item_code,
+						"bom_no": pr.bom_no,
+						"planned_qty": pr.buffer_qty,
+						"planned_start_date": nowdate(),
+						"stock_uom": pr.stock_uom,
+						"description": _("Buffer / safety stock (not linked to a Sales Order)"),
+					},
+				)
+		else:
+			# Simplified: one row per item = Required to Produce (SO rows + buffer).
+			total = sum(flt(q) for _so, _it, q in pr.so_rows) + flt(pr.buffer_qty)
+			if total > 0:
+				pp.append(
+					"po_items",
+					{
+						"item_code": pr.item_code,
+						"bom_no": pr.bom_no,
+						"planned_qty": total,
+						"planned_start_date": nowdate(),
+						"stock_uom": pr.stock_uom,
+					},
+				)
 
 	if not pp.get("po_items"):
 		frappe.throw(

@@ -195,6 +195,15 @@ frappe.query_reports["Production Requirement Report"] = {
 			// Hides the column pair for any SO whose lines are all fully reserved.
 			// Purely visual — Required to Produce still counts every open SO.
 		},
+		{
+			fieldname: "link_sales_orders",
+			label: __("Link Sales Orders in Plan"),
+			fieldtype: "Check",
+			default: 1,
+			// On: the Production Plan is split per Sales Order (SO-linked rows +
+			// an unlinked buffer row). Off: one simplified row per item carrying
+			// the whole Required to Produce, no SO linkage. Same total either way.
+		},
 	],
 
 	// Cell formatting for readability:
@@ -306,11 +315,13 @@ frappe.query_reports["Production Requirement Report"] = {
 				.map((i) => `<li>${frappe.utils.escape_html(i.item_code)}: ${i.qty}</li>`)
 				.join("");
 
+			const linked = cint(frappe.query_report.get_filter_value("link_sales_orders"));
+			const intro = linked
+				? __("This will create a draft Production Plan, broken down by Sales Order, covering {0} item(s):<ul>{1}</ul>Each item's rows sum to its Required to Produce (buffer shown as a separate unlinked row).", [items.length, item_list_html])
+				: __("This will create a simplified draft Production Plan (one row per item, no Sales Order linkage) covering {0} item(s):<ul>{1}</ul>", [items.length, item_list_html]);
+
 			frappe.confirm(
-				__("This will create a draft Production Plan, broken down by Sales Order, covering {0} item(s):<ul>{1}</ul>Each item's rows sum to its Required to Produce (buffer shown as a separate unlinked row). You'll be able to review and edit before submitting. Continue?", [
-					items.length,
-					item_list_html,
-				]),
+				intro + __("You'll be able to review and edit before submitting. Continue?"),
 				() => {
 					frappe.call({
 						method: `${PRR_METHOD_PATH}.create_production_plan`,

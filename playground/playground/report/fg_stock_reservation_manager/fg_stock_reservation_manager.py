@@ -38,6 +38,7 @@ from playground.playground.report.production_requirement_report.production_requi
 	STOCK_WAREHOUSE,
 	get_open_so_items,
 	get_stock_map,
+	get_reserved_in_stock_warehouse_map,
 	get_item_map,
 	_get_so_header_map,
 	_resolve_date_field,
@@ -69,10 +70,23 @@ def execute(filters=None):
 		sd = so_header.get(r.sales_order, {}).get("sort_date")
 		return (getdate(sd) if sd else date.max, r.sales_order, r.item_code)
 
+	# Free stock basis (mirrors the PRR's "Unreserved Stock Basis" filter):
+	#   All Reservations   -> actual − Bin.reserved_qty (every reservation)
+	#   Only Displayed SOs -> actual − reservations tied to the shown SOs
+	unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
+	displayed_reserved = (
+		get_reserved_in_stock_warehouse_map(sos)
+		if unreserved_basis == "Only Displayed SOs"
+		else {}
+	)
 	free_left = {}
 	for item in fg_items:
 		stock = stock_map.get(item) or frappe._dict()
-		free_left[item] = flt(stock.get("actual_qty")) - flt(stock.get("reserved_qty"))
+		if unreserved_basis == "Only Displayed SOs":
+			reserved_from_stock = displayed_reserved.get(item, 0.0) or 0.0
+		else:
+			reserved_from_stock = flt(stock.get("reserved_qty"))
+		free_left[item] = flt(stock.get("actual_qty")) - reserved_from_stock
 
 	only_unreserved = cint(filters.get("only_unreserved"))
 

@@ -32,6 +32,16 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			fieldtype: "Check",
 			default: 1,
 		},
+		{
+			fieldname: "unreserved_basis",
+			label: __("Unreserved Stock Basis"),
+			fieldtype: "Select",
+			options: ["All Reservations", "Only Displayed SOs"].join("\n"),
+			default: "All Reservations",
+			// Free stock for Reservable Qty: net out every reservation (truly
+			// free — correct for reserving), or only reservations tied to the
+			// shown SOs (to reconcile with the PRR on that basis).
+		},
 	],
 
 	// Tint the Reserved column; emphasise Reservable / Reserve Qty.

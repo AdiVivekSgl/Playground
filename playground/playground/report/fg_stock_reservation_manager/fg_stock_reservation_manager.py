@@ -151,6 +151,18 @@ def execute(filters=None):
 			}
 		)
 
+	# Rows are already ordered so that a Sales Order's lines are adjacent (see
+	# _sort_key above: date, then sales_order, then item_code). Mark the first
+	# row of each contiguous same-SO run so the "Group by Sales Order" toggle
+	# can blank the repeated SO/Customer/Date text client-side, without
+	# touching the underlying values the row actions (create/cancel/select)
+	# rely on. Any later view_mode filtering below only ever drops a SO's rows
+	# as a whole (never partially), so this marking stays valid afterwards.
+	last_so = None
+	for row in data:
+		row["so_group_first"] = row["sales_order"] != last_so
+		last_so = row["sales_order"]
+
 	if not view_mode:
 		return get_columns(), data
 

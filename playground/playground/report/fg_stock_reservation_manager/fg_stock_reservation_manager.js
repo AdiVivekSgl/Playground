@@ -51,12 +51,32 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			hidden: 1,
 			default: "",
 		},
+		{
+			fieldname: "group_by_so",
+			label: __("Group by Sales Order"),
+			fieldtype: "Check",
+			default: 0,
+			// Rows are always ordered so a SO's lines are adjacent; this toggle
+			// just blanks the repeated SO/Customer/Date text on later lines of
+			// the same SO for a cleaner grouped look. The underlying row data
+			// (used by Create/Cancel/Select) is never touched.
+		},
 	],
 
 	// Tint the Reserved column; emphasise Reservable / Reserve Qty.
 	formatter(value, row, column, data, default_formatter) {
 		let formatted = default_formatter(value, row, column, data);
 		const f = column.fieldname || "";
+		const grouping = cint(frappe.query_report.get_filter_value("group_by_so"));
+
+		if (grouping && data && data.so_group_first === false && (f === "sales_order" || f === "customer" || f === "so_date")) {
+			return "";
+		}
+
+		if (grouping && f === "sales_order" && data && data.so_group_first) {
+			formatted = `<div style="border-top:1px solid var(--border-color, #d1d8dd);margin-top:-1px;padding-top:7px;">${formatted}</div>`;
+		}
+
 		if (f === "reserved_qty") {
 			return `<div style="background-color:#fde2e7;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
 		}

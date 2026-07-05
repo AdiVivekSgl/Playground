@@ -307,14 +307,14 @@ frappe.query_reports["Production Requirement Report"] = {
 				.join("");
 
 			frappe.confirm(
-				__("This will create a draft Production Plan with {0} item(s):<ul>{1}</ul>You'll be able to review and edit it before submitting. Continue?", [
+				__("This will create a draft Production Plan, broken down by Sales Order, covering {0} item(s):<ul>{1}</ul>Each item's rows sum to its Required to Produce (buffer shown as a separate unlinked row). You'll be able to review and edit before submitting. Continue?", [
 					items.length,
 					item_list_html,
 				]),
 				() => {
 					frappe.call({
 						method: `${PRR_METHOD_PATH}.create_production_plan`,
-						args: { items: JSON.stringify(items) },
+						args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
 						freeze: true,
 						freeze_message: __("Creating Production Plan..."),
 						callback: function (r) {

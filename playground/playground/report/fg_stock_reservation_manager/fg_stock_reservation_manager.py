@@ -36,13 +36,11 @@ from datetime import date
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
 	STOCK_WAREHOUSE,
-	CUSTOM_DELIVERY_DATE_FIELD,
 	get_open_so_items,
 	get_stock_map,
-	get_customer_name_map,
 	get_item_map,
-	_so_header_label,
 	_get_so_header_map,
+	_resolve_date_field,
 )
 
 
@@ -54,15 +52,18 @@ def execute(filters=None):
 		return get_columns(), []
 
 	fg_items = sorted(set(r.item_code for r in so_items))
+	sos = sorted(set(r.sales_order for r in so_items))
 	line_reserved = get_line_reserved_map([r.so_item for r in so_items])
 	stock_map = get_stock_map(fg_items)
 	item_map = get_item_map(fg_items)
-	customer_name_map = get_customer_name_map(so_items)
+
+	# "Date" column shows the SO date chosen by the Date Basis dropdown.
+	so_date_map = _get_so_date_map(sos, filters.get("date_basis"))
 
 	# Item free stock is shared across an item's SO lines; deduct as we walk the
-	# lines (FIFO by delivery date) so "Reservable Now" doesn't over-promise the
+	# lines (FIFO by delivery date) so "Reservable Qty" doesn't over-promise the
 	# same units to two lines.
-	so_header = _get_so_header_map(sorted(set(r.sales_order for r in so_items)))
+	so_header = _get_so_header_map(sos)
 
 	def _sort_key(r):
 		sd = so_header.get(r.sales_order, {}).get("sort_date")
@@ -91,21 +92,22 @@ def execute(filters=None):
 		if only_unreserved and outstanding <= 0:
 			continue
 
+		# Short to Complete = Pending − Reserved (unfilled demand for this SO
+		# line) — the same pending−reserved figure the PRR nets before it
+		# subtracts free stock/buffer.
+		short_to_complete = max(0.0, outstanding)
+
 		data.append(
 			{
 				"item_code": r.item_code,
 				"item_name": details.get("item_name"),
 				"customer": r.customer,
-				"customer_so": _so_header_label(
-					r.sales_order, {r.sales_order: r.customer}, customer_name_map
-				),
 				"sales_order": r.sales_order,
+				"so_date": so_date_map.get(r.sales_order),
 				"sales_order_item": r.so_item,
-				"stock_uom": details.get("stock_uom"),
 				"pending_qty": pending,
 				"reserved_qty": reserved,
-				"item_free_stock": flt(stock_map.get(r.item_code, {}).get("actual_qty"))
-				- flt(stock_map.get(r.item_code, {}).get("reserved_qty")),
+				"short_to_complete": short_to_complete,
 				"reservable_now": reservable,
 				"reserve_qty": reservable,
 				"existing_sre": ",".join(res.get("sre_names") or []),
@@ -117,19 +119,29 @@ def execute(filters=None):
 
 def get_columns():
 	return [
-		{"label": _("FG Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 150},
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
-		{"label": _("Customer (SO)"), "fieldname": "customer_so", "fieldtype": "Data", "width": 220},
-		{"label": _("Sales Order"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 130},
-		{"label": _("SO Item"), "fieldname": "sales_order_item", "fieldtype": "Data", "hidden": 1, "width": 100},
-		{"label": _("UOM"), "fieldname": "stock_uom", "fieldtype": "Link", "options": "UOM", "width": 80},
+		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link", "options": "Customer", "width": 160},
+		{"label": _("SO"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 130},
+		{"label": _("Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 100},
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
-		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
-		{"label": _("Reservable Now"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130},
-		{"label": _("Reserve Qty"), "fieldname": "reserve_qty", "fieldtype": "Float", "width": 110},
+		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
+		{"label": _("Reservable Qty"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130},
+		{"label": _("To Reserve Qty"), "fieldname": "reserve_qty", "fieldtype": "Float", "width": 130},
+		{"label": _("FG Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "hidden": 1, "width": 120},
+		{"label": _("SO Item"), "fieldname": "sales_order_item", "fieldtype": "Data", "hidden": 1, "width": 100},
 		{"label": _("Existing SRE"), "fieldname": "existing_sre", "fieldtype": "Data", "hidden": 1, "width": 100},
 	]
+
+
+def _get_so_date_map(sos, date_basis):
+	"""{sales_order: date} using the Sales Order field chosen by the Date Basis
+	dropdown (same resolver the report filter uses)."""
+	if not sos:
+		return {}
+	field = _resolve_date_field(date_basis)
+	rows = frappe.get_all("Sales Order", filters={"name": ["in", sos]}, fields=["name", field])
+	return {r["name"]: r.get(field) for r in rows}
 
 
 def get_line_reserved_map(so_item_names):

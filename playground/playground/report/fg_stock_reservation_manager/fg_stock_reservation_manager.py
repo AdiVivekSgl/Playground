@@ -20,6 +20,12 @@ Actions (see the client script):
     (FIFO by delivery date across lines sharing an item), via ERPNext's native
     reservation path.
   - Cancel Reservations: cancel the SREs on the selected lines, releasing stock.
+  - Ready to Dispatch / Possible to Complete: view filters that narrow the
+    report to Sales Orders where EVERY line meets a condition -
+      Ready to Dispatch    -> Short to Complete == 0 on every line
+      Possible to Complete -> Short to Complete <  Item Free Stock on every line
+    Both ignore "Only lines with unreserved pending" while active, since they
+    need to see every line of a SO to judge whether all of them qualify.
 
 Prerequisite: "Stock Reservation" must be enabled in Stock Settings.
 
@@ -47,6 +53,7 @@ from playground.playground.report.production_requirement_report.production_requi
 
 def execute(filters=None):
 	filters = filters or {}
+	view_mode = filters.get("view_mode") or ""
 
 	so_items = get_open_so_items(filters)
 	if not so_items:
@@ -79,16 +86,27 @@ def execute(filters=None):
 		if unreserved_basis == "Only Displayed SOs"
 		else {}
 	)
-	free_left = {}
+	# Stable per-item free stock, for the "Item Free Stock" column and the
+	# "Possible to Complete" view — NOT decremented as lines are processed.
+	# `free_left` below is a separate working copy consumed FIFO purely to
+	# compute each line's Reservable Qty (so two lines sharing an item can't
+	# both claim the same units).
+	item_free_stock_map = {}
 	for item in fg_items:
 		stock = stock_map.get(item) or frappe._dict()
 		if unreserved_basis == "Only Displayed SOs":
 			reserved_from_stock = displayed_reserved.get(item, 0.0) or 0.0
 		else:
 			reserved_from_stock = flt(stock.get("reserved_qty"))
-		free_left[item] = flt(stock.get("actual_qty")) - reserved_from_stock
+		item_free_stock_map[item] = flt(stock.get("actual_qty")) - reserved_from_stock
+	free_left = dict(item_free_stock_map)
 
 	only_unreserved = cint(filters.get("only_unreserved"))
+	# A view button wants to see the SO's whole picture (to judge whether ALL
+	# of its lines qualify), not a pre-filtered subset — ignore "only lines
+	# with unreserved pending" while a view is active.
+	if view_mode:
+		only_unreserved = 0
 
 	data = []
 	for r in sorted(so_items, key=_sort_key):
@@ -122,13 +140,32 @@ def execute(filters=None):
 				"pending_qty": pending,
 				"reserved_qty": reserved,
 				"short_to_complete": short_to_complete,
+				"item_free_stock": item_free_stock_map.get(r.item_code, 0.0),
 				"reservable_now": reservable,
 				"reserve_qty": reservable,
 				"existing_sre": ",".join(res.get("sre_names") or []),
 			}
 		)
 
-	return get_columns(), data
+	if not view_mode:
+		return get_columns(), data
+
+	# Evaluate per-SO qualification across ALL of that SO's lines (only_unreserved
+	# was forced off above, so `data` already holds every line for each SO here).
+	#   ready_to_dispatch   -> Short to Complete == 0 on every line
+	#   possible_to_complete -> Short to Complete <  Item Free Stock on every line
+	so_ok = {}
+	for row in data:
+		so = row["sales_order"]
+		short = flt(row["short_to_complete"])
+		free = flt(row["item_free_stock"])
+		prev = so_ok.setdefault(so, {"ready": True, "possible": True})
+		prev["ready"] = prev["ready"] and short <= 0.0001
+		prev["possible"] = prev["possible"] and short < free
+
+	key = "ready" if view_mode == "ready_to_dispatch" else "possible"
+	qualifying_sos = {so for so, flags in so_ok.items() if flags[key]}
+	return get_columns(), [row for row in data if row["sales_order"] in qualifying_sos]
 
 
 def get_columns():
@@ -140,6 +177,7 @@ def get_columns():
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
+		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
 		{"label": _("Reservable Qty"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130},
 		{"label": _("To Reserve Qty"), "fieldname": "reserve_qty", "fieldtype": "Float", "width": 130},
 		{"label": _("FG Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "hidden": 1, "width": 120},

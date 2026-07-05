@@ -42,6 +42,15 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			// free — correct for reserving), or only reservations tied to the
 			// shown SOs (to reconcile with the PRR on that basis).
 		},
+		{
+			// Carries the active view ("" / ready_to_dispatch / possible_to_complete)
+			// set by the view buttons below. Hidden — not meant to be typed in.
+			fieldname: "view_mode",
+			label: __("View"),
+			fieldtype: "Data",
+			hidden: 1,
+			default: "",
+		},
 	],
 
 	// Tint the Reserved column; emphasise Reservable / Reserve Qty.
@@ -50,6 +59,9 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		const f = column.fieldname || "";
 		if (f === "reserved_qty") {
 			return `<div style="background-color:#fde2e7;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
+		}
+		if (f === "item_free_stock" && data && flt(data.item_free_stock) < 0) {
+			return `<span style="color:red;">${formatted}</span>`;
 		}
 		if (f === "reservable_now") {
 			return `<div style="background-color:#e1f5ee;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
@@ -113,6 +125,23 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 				});
 			},
 			__("Reports")
+		);
+
+		// ── Views: narrow to SOs where every line meets a condition ─────────
+		report.page.add_inner_button(
+			__("Ready to Dispatch"),
+			() => frappe.query_report.set_filter_value("view_mode", "ready_to_dispatch"),
+			__("Views")
+		);
+		report.page.add_inner_button(
+			__("Possible to Complete"),
+			() => frappe.query_report.set_filter_value("view_mode", "possible_to_complete"),
+			__("Views")
+		);
+		report.page.add_inner_button(
+			__("Show All"),
+			() => frappe.query_report.set_filter_value("view_mode", ""),
+			__("Views")
 		);
 
 		// ── Bulk selection by SO / Item (drives both Create and Cancel) ──────

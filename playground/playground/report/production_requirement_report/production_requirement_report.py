@@ -386,7 +386,8 @@ def _value_metrics(so_items, so_customer, pending_map, reserved_map):
 	    (SO, item) — the value of what actually needs producing
 	  - multi_so_customer_count = customers with more than one open SO here
 	  - top_sos = [(sales_order, pending_value, pending_qty, produce_qty), ...]
-	    top 20 SOs by pending value (produce_qty = Σ max(0, pending - reserved))
+	    top 20 SOs by pending value, where produce_qty = max(0, SO total pending
+	    − SO total reserved)
 	"""
 	so_pending_value = {}
 	so_pending_qty = {}
@@ -398,16 +399,23 @@ def _value_metrics(so_items, so_customer, pending_map, reserved_map):
 		rate_map[(so, r.item_code)] = flt(r.rate)
 	total_pending_value = sum(so_pending_value.values())
 
-	# Produce qty/value: pending net of reservations, clamped at 0 per (SO, item)
-	# (an over-reserved line needs no production and must not offset others).
-	so_produce_qty = {}
+	# Chart line "Qty to produce" per SO = (pending − reserved) for that SO,
+	# i.e. the SO's total pending minus its total reserved, clamped at 0.
+	so_reserved_qty = {}
+	for (so, _item), reserved in reserved_map.items():
+		so_reserved_qty[so] = so_reserved_qty.get(so, 0.0) + flt(reserved)
+	so_produce_qty = {
+		so: max(0.0, so_pending_qty.get(so, 0.0) - so_reserved_qty.get(so, 0.0))
+		for so in so_pending_qty
+	}
+
+	# Production Value card: value still to produce, netted per (SO, item) and
+	# clamped there (an over-reserved line contributes 0, never a negative).
 	production_value = 0.0
 	for (so, item), pending in pending_map.items():
 		net = flt(pending) - flt(reserved_map.get((so, item), 0.0))
-		if net <= 0:
-			continue
-		so_produce_qty[so] = so_produce_qty.get(so, 0.0) + net
-		production_value += net * rate_map.get((so, item), 0.0)
+		if net > 0:
+			production_value += net * rate_map.get((so, item), 0.0)
 
 	customer_sos = {}
 	for so, customer in so_customer.items():

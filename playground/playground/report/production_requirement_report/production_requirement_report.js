@@ -77,6 +77,22 @@ function prr_render_combo_chart() {
 						fill: false,
 						order: 1,
 					},
+					{
+						type: "line",
+						label: __("Qty to produce"),
+						data: series.produce,
+						yAxisID: "yQty",
+						borderColor: "#199e70",
+						backgroundColor: "#199e70",
+						borderWidth: 2,
+						borderDash: [5, 4],
+						pointRadius: 3,
+						pointStyle: "rectRot",
+						pointHoverRadius: 5,
+						tension: 0.3,
+						fill: false,
+						order: 0,
+					},
 				],
 			},
 			options: {
@@ -87,10 +103,7 @@ function prr_render_combo_chart() {
 					legend: { display: false },
 					tooltip: {
 						callbacks: {
-							label: (c) =>
-								c.dataset.yAxisID === "yValue"
-									? "  " + __("Value") + ": " + Math.round(c.parsed.y).toLocaleString()
-									: "  " + __("Qty") + ": " + Math.round(c.parsed.y).toLocaleString(),
+							label: (c) => "  " + c.dataset.label + ": " + Math.round(c.parsed.y).toLocaleString(),
 						},
 					},
 				},
@@ -140,18 +153,21 @@ frappe.query_reports["Production Requirement Report"] = {
 			options: "Customer",
 		},
 		{
-			fieldname: "include_draft",
-			label: __("Include Draft SOs"),
-			fieldtype: "Check",
-			default: 0,
-			// Off: submitted SOs only. On: also include Draft (docstatus 0) SOs.
+			fieldname: "unreserved_basis",
+			label: __("Unreserved Stock Basis"),
+			fieldtype: "Select",
+			options: ["All Reservations", "Only Displayed SOs"].join("\n"),
+			default: "Only Displayed SOs",
+			// What "Total Avlbl Free Stock" nets out of the stores warehouse
+			// on-hand: every reservation (truly free stock), or only reservations
+			// tied to the Sales Orders shown here.
 		},
 		{
 			fieldname: "date_basis",
 			label: __("Date Basis"),
 			fieldtype: "Select",
 			options: ["Document Creation Date", "Delivery Date", "Custom Updated Delivery Date"].join("\n"),
-			default: "Document Creation Date",
+			default: "Custom Updated Delivery Date",
 			// Which Sales Order date the From/To range filters on.
 		},
 		{
@@ -165,14 +181,11 @@ frappe.query_reports["Production Requirement Report"] = {
 			fieldtype: "Date",
 		},
 		{
-			fieldname: "unreserved_basis",
-			label: __("Unreserved Stock Basis"),
-			fieldtype: "Select",
-			options: ["All Reservations", "Only Displayed SOs"].join("\n"),
-			default: "Only Displayed SOs",
-			// What "Total Avlbl Free Stock" nets out of the stores warehouse
-			// on-hand: every reservation (truly free stock), or only reservations
-			// tied to the Sales Orders shown here.
+			fieldname: "include_draft",
+			label: __("Include Draft SOs"),
+			fieldtype: "Check",
+			default: 0,
+			// Off: submitted SOs only. On: also include Draft (docstatus 0) SOs.
 		},
 		{
 			fieldname: "hide_fulfilled",

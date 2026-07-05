@@ -4,6 +4,14 @@
 const FGSRM_METHOD_PATH =
 	"playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager";
 
+// The report rows currently ticked in the DataTable (as data objects).
+function fgsrm_checked_rows() {
+	const dt = frappe.query_report.datatable;
+	const data = frappe.query_report.data || [];
+	if (!dt || !dt.getCheckedRows) return [];
+	return (dt.getCheckedRows() || []).map((i) => data[i]).filter(Boolean);
+}
+
 frappe.query_reports["FG Stock Reservation Manager"] = {
 	filters: [
 		{ fieldname: "item_code", label: __("FG Item"), fieldtype: "Link", options: "Item" },
@@ -78,8 +86,57 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 	},
 
 	onload(report) {
+		// ── Bulk selection by SO / Item (drives both Create and Cancel) ──────
+		report.page.add_inner_button(
+			__("Select by SO / Item"),
+			() => {
+				frappe.prompt(
+					[
+						{ fieldname: "sales_order", label: __("Sales Order"), fieldtype: "Link", options: "Sales Order" },
+						{ fieldname: "item_code", label: __("FG Item"), fieldtype: "Link", options: "Item" },
+					],
+					(values) => {
+						if (!values.sales_order && !values.item_code) {
+							frappe.msgprint(__("Pick a Sales Order and/or an Item to select by."));
+							return;
+						}
+						const dt = frappe.query_report.datatable;
+						const data = frappe.query_report.data || [];
+						if (!dt) return;
+						dt.rowmanager.checkAll(false);
+						let n = 0;
+						data.forEach((r, i) => {
+							const so_ok = !values.sales_order || r.sales_order === values.sales_order;
+							const item_ok = !values.item_code || r.item_code === values.item_code;
+							if (so_ok && item_ok) {
+								dt.rowmanager.checkRow(i);
+								n++;
+							}
+						});
+						frappe.show_alert({ message: __("Selected {0} line(s).", [n]), indicator: "blue" });
+					},
+					__("Select lines by SO / Item"),
+					__("Select")
+				);
+			},
+			__("Selection")
+		);
+
+		report.page.add_inner_button(
+			__("Clear Selection"),
+			() => {
+				const dt = frappe.query_report.datatable;
+				if (dt) dt.rowmanager.checkAll(false);
+			},
+			__("Selection")
+		);
+
 		report.page.add_inner_button(__("Create Reservations"), () => {
-			const rows = (frappe.query_report.data || [])
+			// If any rows are ticked, act only on them (SO/item-wise bulk create);
+			// otherwise fall back to every line that has a Reserve Qty.
+			const checked = fgsrm_checked_rows();
+			const source = checked.length ? checked : frappe.query_report.data || [];
+			const rows = source
 				.filter((r) => flt(r.reserve_qty) > 0)
 				.map((r) => ({
 					sales_order: r.sales_order,
@@ -89,7 +146,7 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 				}));
 
 			if (!rows.length) {
-				frappe.msgprint(__("Enter a Reserve Qty on at least one line first."));
+				frappe.msgprint(__("Tick the lines to reserve (or enter a Reserve Qty), then try again."));
 				return;
 			}
 
@@ -118,16 +175,12 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		});
 
 		report.page.add_inner_button(__("Cancel Reservations"), () => {
-			const dt = frappe.query_report.datatable;
-			const checked = dt ? dt.getCheckedRows() : [];
-			const data = frappe.query_report.data || [];
-			const sre_names = (checked || [])
-				.map((i) => data[i])
-				.filter((r) => r && r.existing_sre)
+			const sre_names = fgsrm_checked_rows()
+				.filter((r) => r.existing_sre)
 				.map((r) => r.existing_sre);
 
 			if (!sre_names.length) {
-				frappe.msgprint(__("Tick one or more rows that have an existing reservation to cancel."));
+				frappe.msgprint(__("Tick one or more rows that have an existing reservation to cancel (use Select by SO / Item for bulk)."));
 				return;
 			}
 

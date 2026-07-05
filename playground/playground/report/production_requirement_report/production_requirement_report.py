@@ -41,10 +41,11 @@ won't net reservations out of demand.
 
 import base64
 import json
+from datetime import date
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, nowdate
+from frappe.utils import cint, flt, getdate, nowdate
 
 OPEN_SO_STATUSES = ["Draft", "On Hold", "To Deliver and Bill", "To Bill", "To Deliver"]
 
@@ -82,12 +83,14 @@ def update_buffer_qty(item_code, buffer_qty):
 
 
 @frappe.whitelist()
-def create_production_plan(items):
-	"""Creates a draft Production Plan pre-populated from the report's Required to Produce
-	column. Left unsubmitted so a human reviews/edits/submits it - never auto-submitted."""
-	items = frappe.parse_json(items)
-	if not items:
-		frappe.throw(_("No items with a positive Required to Produce quantity were found."))
+def create_production_plan(filters=None):
+	"""Creates a DRAFT Production Plan broken down by Sales Order from the
+	report's Required to Produce. Recomputed server-side from `filters` (so it
+	matches the report, including Buffer edits already persisted to
+	Item.safety_stock). Each (item, SO) shortfall becomes an SO-linked po_items
+	row; the item's buffer becomes one unlinked row; the rows for an item sum to
+	its Required to Produce. Never auto-submitted."""
+	filters = frappe.parse_json(filters) if filters else {}
 
 	company = (
 		frappe.defaults.get_user_default("Company")
@@ -96,57 +99,202 @@ def create_production_plan(items):
 	if not company:
 		frappe.throw(_("No default Company found. Please set one before creating a Production Plan."))
 
+	plan_rows, sales_orders = _compute_plan_rows(filters)
+
 	pp = frappe.new_doc("Production Plan")
 	pp.company = company
+	for so in sales_orders:
+		pp.append("sales_orders", so)
 
 	skipped = []
-
-	for row in items:
-		item_code = row.get("item_code")
-		qty = flt(row.get("qty"))
-		if not item_code or qty <= 0:
+	for pr in plan_rows:
+		if not pr.bom_no:
+			skipped.append(pr.item_code)
 			continue
 
-		item = frappe.db.get_value(
-			"Item", item_code, ["stock_uom", "default_bom"], as_dict=True
-		)
-		if not item:
-			skipped.append(item_code)
-			continue
+		for so, so_item, qty in pr.so_rows:
+			if flt(qty) <= 0:
+				continue
+			pp.append(
+				"po_items",
+				{
+					"item_code": pr.item_code,
+					"bom_no": pr.bom_no,
+					"planned_qty": qty,
+					"planned_start_date": nowdate(),
+					"stock_uom": pr.stock_uom,
+					"sales_order": so,
+					"sales_order_item": so_item,
+				},
+			)
 
-		bom_no = item.default_bom or frappe.db.get_value(
-			"BOM",
-			{"item": item_code, "is_default": 1, "is_active": 1, "docstatus": 1},
-			"name",
-		)
-		if not bom_no:
-			skipped.append(item_code)
-			continue
-
-		pp.append(
-			"po_items",
-			{
-				"item_code": item_code,
-				"bom_no": bom_no,
-				"planned_qty": qty,
-				"planned_start_date": nowdate(),
-				"stock_uom": item.stock_uom,
-			},
-		)
+		if flt(pr.buffer_qty) > 0:
+			pp.append(
+				"po_items",
+				{
+					"item_code": pr.item_code,
+					"bom_no": pr.bom_no,
+					"planned_qty": pr.buffer_qty,
+					"planned_start_date": nowdate(),
+					"stock_uom": pr.stock_uom,
+					"description": _("Buffer / safety stock (not linked to a Sales Order)"),
+				},
+			)
 
 	if not pp.get("po_items"):
-		frappe.throw(_("None of the selected items have an active default BOM - could not create a Production Plan."))
+		frappe.throw(
+			_("Nothing to produce — every item's Required to Produce is zero, or none have an active default BOM.")
+		)
 
 	pp.insert()
 
 	if skipped:
 		frappe.msgprint(
-			_("Skipped (no active default BOM found): {0}").format(", ".join(skipped)),
+			_("Skipped (no active default BOM found): {0}").format(", ".join(sorted(set(skipped)))),
 			indicator="orange",
 			alert=True,
 		)
 
 	return pp.name
+
+
+def _compute_plan_rows(filters):
+	"""Per-item Production Plan rows, reusing the report's own demand/stock
+	helpers so the plan reconciles to the Required to Produce column. Returns
+	(plan_rows, sales_orders) where each plan row is
+	{item_code, bom_no, stock_uom, so_rows: [(sales_order, so_item, qty), ...],
+	buffer_qty} and sales_orders is the Production Plan Sales Order child rows for
+	every SO actually used. Free stock is netted across the item's SOs FIFO by
+	delivery date; the buffer (plus any stock deficit) becomes the unlinked row."""
+	unreserved_basis = filters.get("unreserved_basis") or "Only Displayed SOs"
+
+	so_items = get_open_so_items(filters)
+	if not so_items:
+		return [], []
+
+	fg_items = sorted(set(r.item_code for r in so_items))
+	open_sos = get_ordered_open_sos(so_items)
+
+	pending_map = build_pending_map(so_items)
+	reserved_map = get_reserved_map(open_sos)
+	stock_map = get_stock_map(fg_items)
+	stock_reserved_map = get_reserved_in_stock_warehouse_map(open_sos)
+	item_map = get_item_map(fg_items)
+	so_header = _get_so_header_map(open_sos)
+
+	# Representative SO Item (largest-pending line) per (SO, item) for linkage.
+	so_item_name = {}
+	so_item_best = {}
+	for r in so_items:
+		key = (r.sales_order, r.item_code)
+		if flt(r.pending_qty) >= so_item_best.get(key, -1.0):
+			so_item_best[key] = flt(r.pending_qty)
+			so_item_name[key] = r.so_item
+
+	def _sort_key(so):
+		sd = so_header.get(so, {}).get("sort_date")
+		return getdate(sd) if sd else date.max
+
+	plan_rows = []
+	used_sos = set()
+
+	for item in fg_items:
+		# Free stock S for this item, respecting the unreserved basis.
+		stock = stock_map.get(item) or frappe._dict()
+		if unreserved_basis == "Only Displayed SOs":
+			reserved_from_stock = stock_reserved_map.get(item, 0.0) or 0.0
+		else:
+			reserved_from_stock = flt(stock.get("reserved_qty"))
+		free_stock = flt(stock.get("actual_qty")) - reserved_from_stock
+		available = free_stock if free_stock > 0 else 0.0
+		deficit = -free_stock if free_stock < 0 else 0.0
+
+		buffer = flt((item_map.get(item) or frappe._dict()).get("safety_stock"))
+
+		# Per-SO gross demand (pending − reserved), FIFO by delivery date; free
+		# stock covers the earliest-due SOs first.
+		item_sos = sorted(
+			[so for so in open_sos if flt(pending_map.get((so, item), 0.0)) > 0],
+			key=_sort_key,
+		)
+		remaining = available
+		total_demand = 0.0
+		so_rows = []
+		for so in item_sos:
+			demand = flt(pending_map.get((so, item), 0.0)) - flt(reserved_map.get((so, item), 0.0))
+			if demand <= 0:
+				continue
+			total_demand += demand
+			cover = min(demand, remaining)
+			remaining -= cover
+			produced = demand - cover
+			if produced > 0:
+				so_rows.append((so, so_item_name.get((so, item)), produced))
+
+		# remaining is the leftover free stock after covering all demand.
+		buffer_row = max(0.0, buffer - remaining) + deficit
+
+		if not so_rows and buffer_row <= 0:
+			continue
+
+		item_detail = frappe.db.get_value("Item", item, ["stock_uom", "default_bom"], as_dict=True)
+		if not item_detail:
+			continue
+		bom_no = item_detail.default_bom or frappe.db.get_value(
+			"BOM", {"item": item, "is_default": 1, "is_active": 1, "docstatus": 1}, "name"
+		)
+
+		for so, _n, _q in so_rows:
+			used_sos.add(so)
+
+		plan_rows.append(
+			frappe._dict(
+				{
+					"item_code": item,
+					"bom_no": bom_no,
+					"stock_uom": item_detail.stock_uom,
+					"so_rows": so_rows,
+					"buffer_qty": buffer_row,
+				}
+			)
+		)
+
+	sales_orders = [
+		{
+			"sales_order": so_header[so]["sales_order"],
+			"sales_order_date": so_header[so]["sales_order_date"],
+			"customer": so_header[so]["customer"],
+			"grand_total": so_header[so]["grand_total"],
+		}
+		for so in open_sos
+		if so in used_sos and so in so_header
+	]
+	return plan_rows, sales_orders
+
+
+def _get_so_header_map(open_sos):
+	"""{so: {sales_order, sales_order_date, customer, grand_total, sort_date}} —
+	sort_date is custom_updated_delivery_date, then delivery_date, then
+	transaction_date, for FIFO stock allocation."""
+	if not open_sos:
+		return {}
+	has_custom = frappe.db.has_column("Sales Order", CUSTOM_DELIVERY_DATE_FIELD)
+	fields = ["name", "transaction_date", "delivery_date", "customer", "base_grand_total"]
+	if has_custom:
+		fields.append(CUSTOM_DELIVERY_DATE_FIELD)
+
+	rows = frappe.get_all("Sales Order", filters={"name": ["in", open_sos]}, fields=fields)
+	out = {}
+	for r in rows:
+		sort_date = (r.get(CUSTOM_DELIVERY_DATE_FIELD) if has_custom else None) or r.delivery_date or r.transaction_date
+		out[r.name] = {
+			"sales_order": r.name,
+			"sales_order_date": r.transaction_date,
+			"customer": r.customer,
+			"grand_total": r.base_grand_total,
+			"sort_date": sort_date,
+		}
+	return out
 
 
 def execute(filters=None):
@@ -319,6 +467,7 @@ def get_open_so_items(filters):
 		"""
 		SELECT
 			soi.parent AS sales_order,
+			soi.name AS so_item,
 			so.transaction_date,
 			so.customer,
 			soi.item_code,

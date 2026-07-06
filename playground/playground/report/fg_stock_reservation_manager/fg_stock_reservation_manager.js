@@ -150,6 +150,36 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			__("Reports")
 		);
 
+		// ── Freeze this filtered view's open-SO demand into a new, submitted
+		// Weekly Planning Snapshot (its Items table is pre-populated by
+		// approve_snapshot() server-side - nothing further to fill in). ──
+		report.page.add_inner_button(
+			__("Create Weekly Snapshot"),
+			() => {
+				frappe.confirm(
+					__("This freezes the current open Sales Order demand (for this filtered view) into a new, submitted Weekly Planning Snapshot. Continue?"),
+					() => {
+						frappe.call({
+							method: "playground.playground.report.weekly_planning_snapshot_review.weekly_planning_snapshot_review.approve_snapshot",
+							args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
+							freeze: true,
+							freeze_message: __("Saving snapshot…"),
+							callback(r) {
+								if (r.message) {
+									frappe.show_alert({
+										message: __("Snapshot {0} approved and submitted.", [r.message]),
+										indicator: "green",
+									});
+									frappe.set_route("Form", "Weekly Planning Snapshot", r.message);
+								}
+							},
+						});
+					}
+				);
+			},
+			__("Reports")
+		);
+
 		// ── Views: narrow to SOs where every line meets a condition ─────────
 		report.page.add_inner_button(
 			__("Ready to Dispatch"),

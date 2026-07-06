@@ -506,7 +506,12 @@ def get_open_so_items(filters):
 			-- base_rate = line rate in COMPANY currency, so the Pending Net
 			-- Total card is in company currency and never mixes currencies.
 			soi.base_rate AS rate,
-			(soi.qty - soi.delivered_qty) AS pending_qty
+			(soi.qty - soi.delivered_qty) AS pending_qty,
+			-- qty/delivered_qty (not just the netted pending_qty) so callers can
+			-- distinguish fully vs partially dispatched - additive, existing
+			-- callers only ever reference pending_qty so this is safe for them.
+			soi.qty AS qty,
+			soi.delivered_qty AS delivered_qty
 		FROM `tabSales Order Item` soi
 		INNER JOIN `tabSales Order` so ON so.name = soi.parent
 		WHERE {docstatus_clause}

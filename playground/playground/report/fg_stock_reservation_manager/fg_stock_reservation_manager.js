@@ -5,11 +5,14 @@ const FGSRM_METHOD_PATH =
 	"playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager";
 
 // The report rows currently ticked in the DataTable (as data objects).
+// NOTE: getCheckedRows lives on datatable.rowmanager, not on the datatable
+// object itself — calling dt.getCheckedRows() silently returns undefined,
+// which meant this always reported "nothing selected" even with rows ticked.
 function fgsrm_checked_rows() {
 	const dt = frappe.query_report.datatable;
 	const data = frappe.query_report.data || [];
-	if (!dt || !dt.getCheckedRows) return [];
-	return (dt.getCheckedRows() || []).map((i) => data[i]).filter(Boolean);
+	if (!dt || !dt.rowmanager || !dt.rowmanager.getCheckedRows) return [];
+	return (dt.rowmanager.getCheckedRows() || []).map((i) => data[i]).filter(Boolean);
 }
 
 frappe.query_reports["FG Stock Reservation Manager"] = {

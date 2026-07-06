@@ -9,8 +9,15 @@ The "Friday screen": diffs the live open-SO pull against the last APPROVED
 (submitted) Weekly Planning Snapshot, and computes a live per-line status.
 
 Reused, not reimplemented (see those modules for the actual queries):
-  - get_open_so_items / get_item_map     (production_requirement_report)
-  - get_line_reserved_map                (fg_stock_reservation_manager)
+  - get_open_so_items / get_item_map / get_stock_map   (production_requirement_report)
+  - get_line_reserved_map                              (fg_stock_reservation_manager)
+
+Item Free Stock column/field = actual_qty - Bin.reserved_qty (ALL reservations,
+STOCK_WAREHOUSE) for that item - a stable per-item fact, chosen deliberately
+over Reservable Qty (FGSRM's per-line, FIFO-allocated figure) because this
+value gets frozen into an immutable snapshot: it means the same thing on
+re-read weeks later, regardless of which other lines happened to be in view
+when it was computed.
 
 Diff (by sales_order_item, the SO Item child row name):
   - In both, same pending_qty      -> Unchanged
@@ -46,6 +53,7 @@ from frappe.utils import flt
 from playground.playground.report.production_requirement_report.production_requirement_report import (
 	get_open_so_items,
 	get_item_map,
+	get_stock_map,
 )
 from playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager import (
 	get_line_reserved_map,
@@ -64,6 +72,11 @@ def execute(filters=None):
 
 	fg_items = sorted({r.item_code for r in so_items} | {b.item_code for b in baseline_items if b.item_code})
 	item_map = get_item_map(fg_items)
+	# Live Item Free Stock (actual - ALL reservations, STOCK_WAREHOUSE) for
+	# fresh lines. Closed (baseline-only) lines show their FROZEN value instead
+	# - the point of a snapshot fact is what it was at approval time, not what
+	# it is now.
+	stock_map = get_stock_map(fg_items)
 
 	# Preserve fresh-pull order, then append any baseline-only (closed) keys.
 	all_keys = [r.so_item for r in so_items]
@@ -98,6 +111,9 @@ def execute(filters=None):
 			so_date = f.transaction_date
 			pending_qty = flt(f.pending_qty)
 			reserved_qty = flt((line_reserved.get(key) or {}).get("reserved_qty"))
+			item_free_stock = flt((stock_map.get(item_code) or {}).get("actual_qty")) - flt(
+				(stock_map.get(item_code) or {}).get("reserved_qty")
+			)
 		else:
 			item_code = b.item_code
 			customer = b.customer
@@ -105,6 +121,7 @@ def execute(filters=None):
 			so_date = b.so_date
 			pending_qty = flt(b.pending_qty)
 			reserved_qty = flt(b.reserved_qty)
+			item_free_stock = flt(b.get("item_free_stock"))
 
 		item_name = (item_map.get(item_code) or {}).get("item_name") if item_code else None
 		if not item_name and b:
@@ -119,6 +136,7 @@ def execute(filters=None):
 				"so_date": so_date,
 				"pending_qty": pending_qty,
 				"reserved_qty": reserved_qty,
+				"item_free_stock": item_free_stock,
 				"qty_delta": delta,
 				"diff_bucket": bucket,
 				"status": statuses.get(key),
@@ -138,6 +156,7 @@ def get_columns():
 		{"label": _("SO Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 100},
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
+		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
 		{"label": _("Qty Delta"), "fieldname": "qty_delta", "fieldtype": "Float", "width": 100},
 		{"label": _("Diff Bucket"), "fieldname": "diff_bucket", "fieldtype": "Data", "width": 120},
 		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 160},
@@ -169,6 +188,7 @@ def _get_baseline_items():
 			"so_date",
 			"pending_qty",
 			"reserved_qty",
+			"item_free_stock",
 		],
 	)
 
@@ -277,12 +297,18 @@ def approve_snapshot(filters=None):
 		frappe.throw(_("No open Sales Order lines to snapshot."))
 
 	reserved_map = get_line_reserved_map([r.so_item for r in so_items])
-	item_map = get_item_map(sorted({r.item_code for r in so_items}))
+	fg_items = sorted({r.item_code for r in so_items})
+	item_map = get_item_map(fg_items)
+	# Item Free Stock is frozen at approval time - a stable per-item fact
+	# (actual - ALL reservations, STOCK_WAREHOUSE), not the FIFO-allocated
+	# Reservable Qty FGSRM shows live (see module docstring for why).
+	stock_map = get_stock_map(fg_items)
 
 	snap = frappe.new_doc("Weekly Planning Snapshot")
 	snap.snapshot_date = frappe.utils.nowdate()
 	for r in so_items:
 		res = reserved_map.get(r.so_item) or frappe._dict()
+		stock = stock_map.get(r.item_code) or frappe._dict()
 		snap.append(
 			"items",
 			{
@@ -294,6 +320,7 @@ def approve_snapshot(filters=None):
 				"so_date": r.transaction_date,
 				"pending_qty": r.pending_qty,
 				"reserved_qty": flt(res.get("reserved_qty")),
+				"item_free_stock": flt(stock.get("actual_qty")) - flt(stock.get("reserved_qty")),
 			},
 		)
 

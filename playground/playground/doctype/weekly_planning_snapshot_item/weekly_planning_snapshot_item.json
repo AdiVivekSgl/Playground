@@ -71,6 +71,15 @@
    "in_list_view": 1,
    "columns": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "item_free_stock",
+   "fieldtype": "Float",
+   "label": "Item Free Stock",
+   "in_list_view": 1,
+   "columns": 1,
+   "read_only": 1,
+   "description": "The item's stock-warehouse free stock (actual - all reservations) at the moment this snapshot was approved. A stable per-item fact (unlike Reservable Qty, which is FIFO-allocated across whichever other lines happened to be in view), so it reads the same on re-open weeks later."
   }
  ],
  "permissions": []

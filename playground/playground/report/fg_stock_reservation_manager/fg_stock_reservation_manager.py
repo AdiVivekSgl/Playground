@@ -20,6 +20,10 @@ Actions (see the client script):
     (FIFO by delivery date across lines sharing an item), via ERPNext's native
     reservation path.
   - Cancel Reservations: cancel the SREs on the selected lines, releasing stock.
+  - Dispatch Priority Date (the "Date" column) is editable only when Date
+    Basis = "Custom Updated Delivery Date" - a header-level SO field, so
+    editing it on any row applies to every row sharing that SO. Persisted via
+    update_dispatch_priority_date, guarded by Sales Order write permission.
   - Ready to Dispatch / Possible to Complete: view filters that narrow the
     report to qualifying Sales Orders -
       Ready to Dispatch    -> Short to Complete == 0 on every line (nothing
@@ -46,6 +50,7 @@ from datetime import date
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
 	STOCK_WAREHOUSE,
+	CUSTOM_DELIVERY_DATE_FIELD,
 	get_open_so_items,
 	get_stock_map,
 	get_reserved_in_stock_warehouse_map,
@@ -198,7 +203,11 @@ def get_columns():
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
 		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link", "options": "Customer", "width": 160},
 		{"label": _("SO"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 130},
-		{"label": _("Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 100},
+		# Editable only when Date Basis = "Custom Updated Delivery Date" (see the
+		# client script's get_datatable_options and update_dispatch_priority_date
+		# below) - editing Document Creation Date or Delivery Date wouldn't make
+		# sense, those are factual record-keeping dates, not a priority lever.
+		{"label": _("Dispatch Priority Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 150},
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
@@ -255,6 +264,31 @@ def get_line_reserved_map(so_item_names):
 # --------------------------------------------------------------------------- #
 # Actions
 # --------------------------------------------------------------------------- #
+
+@frappe.whitelist()
+def update_dispatch_priority_date(sales_order, new_date):
+	"""Persist an inline Dispatch Priority Date edit back to
+	Sales Order.custom_updated_delivery_date. A date is a header-level SO
+	field (one per SO, not per line) - the client applies the same edit to
+	every row sharing that SO before calling this, so only one write happens
+	per edit regardless of how many lines that SO has. Guarded by Sales Order
+	write permission and the same has_column defensive check
+	_resolve_date_field uses elsewhere (the field is a custom field that may
+	not exist on every site)."""
+	if not frappe.db.has_column("Sales Order", CUSTOM_DELIVERY_DATE_FIELD):
+		frappe.throw(
+			_("The {0} field does not exist on Sales Order on this site.").format(
+				CUSTOM_DELIVERY_DATE_FIELD
+			)
+		)
+	if not frappe.has_permission("Sales Order", "write", doc=sales_order):
+		frappe.throw(
+			_("You are not permitted to edit Sales Order {0}.").format(sales_order),
+			frappe.PermissionError,
+		)
+	frappe.db.set_value("Sales Order", sales_order, CUSTOM_DELIVERY_DATE_FIELD, new_date)
+	return new_date
+
 
 @frappe.whitelist()
 def create_reservations(rows):

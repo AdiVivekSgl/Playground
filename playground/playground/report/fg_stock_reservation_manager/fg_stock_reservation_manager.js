@@ -95,35 +95,71 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		return formatted;
 	},
 
-	// Make Reserve Qty editable (capped at Reservable Now), and add row checkboxes
-	// so lines can be selected for cancellation.
+	// Make Reserve Qty editable (capped at Reservable Now); make Dispatch
+	// Priority Date editable only when Date Basis = "Custom Updated Delivery
+	// Date" (editing Document Creation Date / Delivery Date wouldn't make
+	// sense - those are factual record-keeping dates, not a priority lever).
+	// Also add row checkboxes so lines can be selected for cancellation.
 	get_datatable_options(datatable_options) {
 		datatable_options.checkboxColumn = true;
+
+		const date_editable =
+			frappe.query_report.get_filter_value("date_basis") === "Custom Updated Delivery Date";
+
 		datatable_options.columns.forEach((column) => {
 			if (column.id === "reserve_qty") column.editable = true;
+			if (column.id === "so_date") column.editable = date_editable;
 		});
 
 		datatable_options.events = datatable_options.events || {};
 		datatable_options.events.onSubmitEditing = function (cell) {
 			const [row_values, cell_id, new_val] = cell;
-			if (cell_id !== "reserve_qty") return;
 
-			let qty = flt(new_val);
-			const cap = flt(row_values.reservable_now);
-			if (qty < 0) qty = 0;
-			if (qty > cap) {
-				frappe.show_alert({
-					message: __("Reserve Qty capped at Reservable Now ({0}).", [cap]),
-					indicator: "orange",
-				});
-				qty = cap;
+			if (cell_id === "reserve_qty") {
+				let qty = flt(new_val);
+				const cap = flt(row_values.reservable_now);
+				if (qty < 0) qty = 0;
+				if (qty > cap) {
+					frappe.show_alert({
+						message: __("Reserve Qty capped at Reservable Now ({0}).", [cap]),
+						indicator: "orange",
+					});
+					qty = cap;
+				}
+				const report_row = (frappe.query_report.data || []).find(
+					(r) => r.sales_order_item === row_values.sales_order_item
+				);
+				if (report_row) report_row.reserve_qty = qty;
+				if (frappe.query_report.datatable) {
+					frappe.query_report.datatable.refresh(frappe.query_report.data);
+				}
+				return;
 			}
-			const report_row = (frappe.query_report.data || []).find(
-				(r) => r.sales_order_item === row_values.sales_order_item
-			);
-			if (report_row) report_row.reserve_qty = qty;
-			if (frappe.query_report.datatable) {
-				frappe.query_report.datatable.refresh(frappe.query_report.data);
+
+			if (cell_id === "so_date") {
+				if (!date_editable) return;
+				const new_date = new_val;
+
+				// A date is a header-level Sales Order field (one per SO, not
+				// per line) - apply the edit to every row sharing this SO,
+				// mirroring the existing so_group_first grouping logic.
+				(frappe.query_report.data || []).forEach((r) => {
+					if (r.sales_order === row_values.sales_order) r.so_date = new_date;
+				});
+				if (frappe.query_report.datatable) {
+					frappe.query_report.datatable.refresh(frappe.query_report.data);
+				}
+
+				frappe.call({
+					method: `${FGSRM_METHOD_PATH}.update_dispatch_priority_date`,
+					args: { sales_order: row_values.sales_order, new_date: new_date },
+					callback() {
+						frappe.show_alert({
+							message: __("Dispatch Priority Date saved for {0}.", [row_values.sales_order]),
+							indicator: "green",
+						});
+					},
+				});
 			}
 		};
 

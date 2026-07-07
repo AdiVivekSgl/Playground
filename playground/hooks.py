@@ -13,6 +13,13 @@ doctype_js = {
 	"Work Order": "public/js/work_order.js",
 }
 
+# Overrides the Sales Order list view's get_indicator so our custom statuses
+# aren't masked by ERPNext's own client-side "Overdue" badge logic - see
+# public/js/sales_order_list.js.
+doctype_list_js = {
+	"Sales Order": "public/js/sales_order_list.js",
+}
+
 fixtures = [
 	{
 		"doctype": "Custom Field",

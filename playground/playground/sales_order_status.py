@@ -54,6 +54,15 @@ def set_custom_status(doc, method=None):
 	if doc.docstatus != 1:
 		return
 
+	# `status` doesn't have allow_on_submit on this site, so a full validated
+	# update on this already-submitted doc (triggered internally by
+	# set_status()/db_set() in some code paths) would otherwise throw "Not
+	# allowed to change ... after submission". This is the officially
+	# supported way to suppress that specific guard for this one in-memory
+	# doc/operation - it does NOT disable the submit-lock for anything else,
+	# including other fields or other saves of this same document.
+	doc.flags.ignore_validate_update_after_submit = True
+
 	# Recompute ERPNext's own status first - see module docstring for why
 	# this matters (both "fresh base" and "un-setting" depend on it).
 	doc.set_status(update=True)

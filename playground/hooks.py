@@ -22,3 +22,11 @@ fixtures = [
 		],
 	}
 ]
+
+# Layers "Ready for Dispatch" / "Inspected" on top of Sales Order's own status
+# after core's own set_status() has run - see sales_order_status.py.
+doc_events = {
+	"Sales Order": {
+		"on_update": "playground.playground.sales_order_status.set_custom_status",
+	}
+}

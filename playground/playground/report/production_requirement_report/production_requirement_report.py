@@ -52,7 +52,22 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, nowdate
 
-OPEN_SO_STATUSES = ["Draft", "On Hold", "To Deliver and Bill", "To Bill", "To Deliver"]
+# "Ready for Dispatch" / "Inspected" are custom statuses (see
+# sales_order_status.py) that ERPNext's core set_status() would otherwise
+# never produce - they replace "To Deliver"/"To Deliver and Bill" once a SO
+# is fully reserved or inspected. Included here so those Sales Orders don't
+# silently drop out of this report (and FG Stock Reservation Manager, Weekly
+# Planning Snapshot, JIT Production Planning Report - all of which reuse
+# get_open_so_items) the moment they earn one of those statuses.
+OPEN_SO_STATUSES = [
+	"Draft",
+	"On Hold",
+	"To Deliver and Bill",
+	"To Bill",
+	"To Deliver",
+	"Ready for Dispatch",
+	"Inspected",
+]
 
 # Total Avlbl Free Stock is measured in this single warehouse only (both the
 # on-hand qty and the reservations netted out of it). Change here if the stores

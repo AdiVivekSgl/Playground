@@ -13,15 +13,6 @@ doctype_js = {
 	"Work Order": "public/js/work_order.js",
 }
 
-# Overrides the Sales Order list view's get_indicator so our custom statuses
-# aren't masked by ERPNext's own client-side "Overdue" badge logic - see
-# public/js/sales_order_list.js. Loaded via app_include_js rather than
-# doctype_list_js: the latter is a per-doctype SCALAR hook, and this site has
-# other installed apps that may also claim "Sales Order" under that same
-# hook, silently colliding with (overriding, not accumulating with) ours.
-# app_include_js genuinely accumulates across every installed app.
-app_include_js = ["public/js/sales_order_list.js"]
-
 fixtures = [
 	{
 		"doctype": "Custom Field",
@@ -31,14 +22,3 @@ fixtures = [
 		],
 	}
 ]
-
-# Layers "Ready for Dispatch" / "Inspected" on top of Sales Order's own status
-# after core's own set_status() has run - see sales_order_status.py.
-# on_sales_order_update (not set_custom_status directly) so a recompute
-# failure - e.g. mid-submit - never surfaces as an error over a legitimate
-# Sales Order save/submit.
-doc_events = {
-	"Sales Order": {
-		"on_update": "playground.playground.sales_order_status.on_sales_order_update",
-	}
-}

@@ -15,10 +15,12 @@ doctype_js = {
 
 # Overrides the Sales Order list view's get_indicator so our custom statuses
 # aren't masked by ERPNext's own client-side "Overdue" badge logic - see
-# public/js/sales_order_list.js.
-doctype_list_js = {
-	"Sales Order": "public/js/sales_order_list.js",
-}
+# public/js/sales_order_list.js. Loaded via app_include_js rather than
+# doctype_list_js: the latter is a per-doctype SCALAR hook, and this site has
+# other installed apps that may also claim "Sales Order" under that same
+# hook, silently colliding with (overriding, not accumulating with) ours.
+# app_include_js genuinely accumulates across every installed app.
+app_include_js = ["public/js/sales_order_list.js"]
 
 fixtures = [
 	{

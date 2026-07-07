@@ -384,17 +384,6 @@ def create_reservations(rows, filters=None):
 				if others:
 					blocked[item_code] = others
 
-	# Recompute status for the SOs that were actually reserved on - in its own
-	# pass, after the reservations themselves are done, so a status-layering
-	# hiccup can never be mistaken for (or interfere with) a reservation
-	# failure. recompute_for_sales_orders() already logs and swallows
-	# per-SO errors internally, so this can't raise.
-	succeeded_sos = [so for so in by_so if so not in skipped_sos]
-	if succeeded_sos:
-		from playground.playground.sales_order_status import recompute_for_sales_orders
-
-		recompute_for_sales_orders(succeeded_sos)
-
 	if skipped_sos:
 		frappe.msgprint(
 			_("Could not reserve on these Sales Orders (see Error Log): {0}").format(", ".join(skipped_sos)),
@@ -438,27 +427,14 @@ def cancel_reservations(sre_names):
 		flat.extend([x for x in str(n).split(",") if x])
 
 	cancelled = 0
-	affected_sos = set()
 	for name in dict.fromkeys(flat):
 		if not frappe.db.exists("Stock Reservation Entry", name):
 			continue
 		doc = frappe.get_doc("Stock Reservation Entry", name)
-		if doc.voucher_type == "Sales Order":
-			affected_sos.add(doc.voucher_no)
 		if doc.docstatus == 1:
 			doc.cancel()
 		if frappe.db.exists("Stock Reservation Entry", name):
 			frappe.delete_doc("Stock Reservation Entry", name, force=True, ignore_permissions=False)
 		cancelled += 1
-
-	if affected_sos:
-		# Deferred import - see sales_order_status.py's docstring: cancelling
-		# a Stock Reservation Entry doesn't put the Sales Order itself through
-		# a full save, so its on_update doc_event won't reliably fire here.
-		# This also handles "un-setting" Ready for Dispatch if the SO no
-		# longer qualifies once the reservation is gone.
-		from playground.playground.sales_order_status import recompute_for_sales_orders
-
-		recompute_for_sales_orders(affected_sos)
 
 	return {"cancelled": cancelled}

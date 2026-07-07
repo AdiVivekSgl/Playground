@@ -18,7 +18,13 @@ against Sales Orders for finished goods, all in one warehouse
 Actions (see the client script):
   - Create Reservations: reserve the entered qty per line, capped at free stock
     (FIFO by delivery date across lines sharing an item), via ERPNext's native
-    reservation path.
+    reservation path. The cap follows the "Unreserved Stock Basis" filter, same
+    as the Item Free Stock column - so what's enforced always matches what was
+    shown. Under "Only Displayed SOs", that cap deliberately ignores
+    reservations tied to other SOs, so ERPNext's own reservation call can still
+    reject a request; when it does, the response's `blocked` map lists the
+    OTHER active reservations against that item so the user can cancel one and
+    retry, rather than a bare failure.
   - Cancel Reservations: cancel the SREs on the selected lines, releasing stock.
   - Dispatch Priority Date (the "Date" column) is editable only when Date
     Basis = "Custom Updated Delivery Date" - a header-level SO field, so
@@ -291,11 +297,23 @@ def update_dispatch_priority_date(sales_order, new_date):
 
 
 @frappe.whitelist()
-def create_reservations(rows):
+def create_reservations(rows, filters=None):
 	"""Create SREs for the given lines, capped at each item's current free stock
 	in STOCK_WAREHOUSE (FIFO by the order rows arrive, which the client sends in
 	the report's FIFO order). Uses ERPNext's native Sales Order reservation so
-	availability, serial/batch, and ledger rules are enforced."""
+	availability, serial/batch, and ledger rules are enforced.
+
+	The free-stock cap follows the report's own "Unreserved Stock Basis"
+	filter (`filters.unreserved_basis`), computed the SAME way execute() does -
+	so what's capped here matches what was shown on screen. Under "Only
+	Displayed SOs", this deliberately ignores reservations tied to other SOs,
+	which means ERPNext's own native call can still reject a request our cap
+	allowed (the other reservations are real, physical commitments - we just
+	chose to look past them for planning purposes). When that happens, rather
+	than only logging and skipping, this returns a `blocked` map of
+	{item_code: [{name, voucher_no, reserved_qty}, ...]} - the OTHER active
+	reservations against that item - so the client can offer to cancel one
+	and retry, instead of a bare failure."""
 	if not frappe.has_permission("Stock Reservation Entry", "create"):
 		frappe.throw(_("You are not permitted to create Stock Reservation Entries."), frappe.PermissionError)
 
@@ -303,15 +321,30 @@ def create_reservations(rows):
 	if not rows:
 		frappe.throw(_("No lines with a Reserve Qty were provided."))
 
-	# Current free stock per item in the warehouse.
+	filters = frappe.parse_json(filters) if filters else {}
+	unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
+
 	items = sorted({r.get("item_code") for r in rows if r.get("item_code")})
 	stock_map = get_stock_map(items)
-	free_left = {
-		it: flt((stock_map.get(it) or {}).get("actual_qty")) - flt((stock_map.get(it) or {}).get("reserved_qty"))
-		for it in items
-	}
+
+	if unreserved_basis == "Only Displayed SOs":
+		# Match execute()'s definition exactly: net out only reservations tied
+		# to the Sales Orders currently in view under these same filters.
+		so_items = get_open_so_items(filters)
+		displayed_sos = sorted({r.sales_order for r in so_items})
+		displayed_reserved = get_reserved_in_stock_warehouse_map(displayed_sos)
+		free_left = {
+			it: flt((stock_map.get(it) or {}).get("actual_qty")) - flt(displayed_reserved.get(it, 0.0))
+			for it in items
+		}
+	else:
+		free_left = {
+			it: flt((stock_map.get(it) or {}).get("actual_qty")) - flt((stock_map.get(it) or {}).get("reserved_qty"))
+			for it in items
+		}
 
 	# Cap each request and group by SO for the native call.
+	so_item_to_item = {}
 	by_so = {}
 	capped = 0
 	for r in rows:
@@ -319,6 +352,7 @@ def create_reservations(rows):
 		qty = flt(r.get("qty"))
 		if not item_code or not r.get("sales_order_item") or qty <= 0:
 			continue
+		so_item_to_item[r.get("sales_order_item")] = item_code
 		allowed = max(0.0, min(qty, free_left.get(item_code, 0.0)))
 		if allowed < qty:
 			capped += 1
@@ -331,6 +365,7 @@ def create_reservations(rows):
 
 	created = 0
 	skipped_sos = []
+	blocked = {}
 	for so, items_details in by_so.items():
 		try:
 			so_doc = frappe.get_doc("Sales Order", so)
@@ -341,6 +376,13 @@ def create_reservations(rows):
 		except Exception:
 			frappe.log_error(title="FG Stock Reservation Manager: create failed for {0}".format(so))
 			skipped_sos.append(so)
+			for detail in items_details:
+				item_code = so_item_to_item.get(detail["sales_order_item"])
+				if not item_code or item_code in blocked:
+					continue
+				others = _get_other_reservations(item_code, exclude_so=so)
+				if others:
+					blocked[item_code] = others
 
 	if skipped_sos:
 		frappe.msgprint(
@@ -349,7 +391,26 @@ def create_reservations(rows):
 			alert=True,
 		)
 
-	return {"created": created, "capped": capped, "skipped": len(skipped_sos)}
+	return {"created": created, "capped": capped, "skipped": len(skipped_sos), "blocked": blocked}
+
+
+def _get_other_reservations(item_code, exclude_so):
+	"""Active (docstatus 1) SREs for this item in STOCK_WAREHOUSE against any
+	Sales Order OTHER than `exclude_so` - candidates the user could cancel to
+	free up enough stock for a reservation ERPNext's native call just
+	rejected. Returns [{name, voucher_no, reserved_qty}, ...]."""
+	return frappe.get_all(
+		"Stock Reservation Entry",
+		filters={
+			"docstatus": 1,
+			"item_code": item_code,
+			"warehouse": STOCK_WAREHOUSE,
+			"voucher_type": "Sales Order",
+			"voucher_no": ["!=", exclude_so],
+		},
+		fields=["name", "voucher_no", "reserved_qty"],
+		order_by="reserved_qty desc",
+	)
 
 
 @frappe.whitelist()

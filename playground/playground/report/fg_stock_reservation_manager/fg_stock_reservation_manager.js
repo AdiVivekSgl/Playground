@@ -15,6 +15,91 @@ function fgsrm_checked_rows() {
 	return (dt.rowmanager.getCheckedRows() || []).map((i) => data[i]).filter(Boolean);
 }
 
+// Calls create_reservations and, if the server reports any `blocked` items
+// (ERPNext's native reservation rejected a request our own cap allowed - see
+// create_reservations' docstring for why "Only Displayed SOs" basis can do
+// this), shows a dialog listing the OTHER reservations holding that item so
+// the user can cancel one and retry, instead of a bare failure.
+function fgsrm_call_create_reservations(rows, filters_json) {
+	frappe.call({
+		method: `${FGSRM_METHOD_PATH}.create_reservations`,
+		args: { rows: JSON.stringify(rows), filters: filters_json },
+		freeze: true,
+		freeze_message: __("Creating reservations…"),
+		callback(r) {
+			const m = r.message || {};
+			frappe.show_alert({
+				message: __("Reserved {0} line(s){1}.", [
+					m.created || 0,
+					m.capped ? __(", {0} capped at free stock", [m.capped]) : "",
+				]),
+				indicator: "green",
+			});
+			frappe.query_report.refresh();
+			if (m.blocked && Object.keys(m.blocked).length) {
+				fgsrm_show_blocked_dialog(m.blocked, rows, filters_json);
+			}
+		},
+	});
+}
+
+function fgsrm_show_blocked_dialog(blocked, retry_rows, filters_json) {
+	const item_codes = Object.keys(blocked);
+	if (!item_codes.length) return;
+
+	const rows_html = item_codes
+		.flatMap((item_code) =>
+			(blocked[item_code] || []).map(
+				(res) => `
+				<tr>
+					<td><input type="checkbox" data-sre="${res.name}" /></td>
+					<td>${frappe.utils.escape_html(item_code)}</td>
+					<td>${frappe.utils.escape_html(res.voucher_no || "")}</td>
+					<td style="text-align:right">${res.reserved_qty}</td>
+				</tr>`
+			)
+		)
+		.join("");
+
+	const html = `
+		<p>${__("Some lines couldn't be reserved — ERPNext found stock already committed to these other reservations. Tick any to cancel, then retry.")}</p>
+		<table class="table table-bordered" style="font-size:12px;">
+			<thead>
+				<tr><th></th><th>${__("Item")}</th><th>${__("Sales Order")}</th><th style="text-align:right">${__("Reserved Qty")}</th></tr>
+			</thead>
+			<tbody>${rows_html}</tbody>
+		</table>`;
+
+	const dialog = new frappe.ui.Dialog({
+		title: __("Reservation Blocked — Existing Reservations"),
+		size: "large",
+		fields: [{ fieldtype: "HTML", options: html }],
+		primary_action_label: __("Cancel Selected & Retry"),
+		primary_action: () => {
+			const checked = Array.from(
+				dialog.$wrapper[0].querySelectorAll("input[data-sre]:checked")
+			).map((el) => el.getAttribute("data-sre"));
+
+			if (!checked.length) {
+				frappe.msgprint(__("Tick at least one reservation to cancel."));
+				return;
+			}
+
+			frappe.call({
+				method: `${FGSRM_METHOD_PATH}.cancel_reservations`,
+				args: { sre_names: JSON.stringify(checked) },
+				freeze: true,
+				freeze_message: __("Cancelling…"),
+				callback() {
+					dialog.hide();
+					fgsrm_call_create_reservations(retry_rows, filters_json);
+				},
+			});
+		},
+	});
+	dialog.show();
+}
+
 frappe.query_reports["FG Stock Reservation Manager"] = {
 	filters: [
 		{ fieldname: "item_code", label: __("FG Item"), fieldtype: "Link", options: "Item" },
@@ -297,27 +382,11 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 				return;
 			}
 
+			const filters_json = JSON.stringify(frappe.query_report.get_filter_values());
+
 			frappe.confirm(
-				__("Create stock reservations for {0} line(s)? Quantities are capped at available free stock.", [rows.length]),
-				() => {
-					frappe.call({
-						method: `${FGSRM_METHOD_PATH}.create_reservations`,
-						args: { rows: JSON.stringify(rows) },
-						freeze: true,
-						freeze_message: __("Creating reservations…"),
-						callback(r) {
-							const m = r.message || {};
-							frappe.show_alert({
-								message: __("Reserved {0} line(s){1}.", [
-									m.created || 0,
-									m.capped ? __(", {0} capped at free stock", [m.capped]) : "",
-								]),
-								indicator: "green",
-							});
-							frappe.query_report.refresh();
-						},
-					});
-				}
+				__("Create stock reservations for {0} line(s)? Quantities are capped at free stock under the current Unreserved Stock Basis.", [rows.length]),
+				() => fgsrm_call_create_reservations(rows, filters_json)
 			);
 		});
 

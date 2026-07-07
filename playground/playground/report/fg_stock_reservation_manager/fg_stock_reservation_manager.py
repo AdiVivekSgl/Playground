@@ -363,12 +363,6 @@ def create_reservations(rows, filters=None):
 			{"sales_order_item": r.get("sales_order_item"), "qty_to_reserve": allowed, "warehouse": STOCK_WAREHOUSE}
 		)
 
-	# Deferred import - see sales_order_status.py's docstring for why this
-	# recompute is called explicitly here rather than relying on the Sales
-	# Order's own on_update doc_event (creating a Stock Reservation Entry
-	# doesn't put the Sales Order itself through a full save).
-	from playground.playground.sales_order_status import set_custom_status
-
 	created = 0
 	skipped_sos = []
 	blocked = {}
@@ -379,7 +373,6 @@ def create_reservations(rows, filters=None):
 			# reserves the given SO item lines in the given warehouse.
 			so_doc.create_stock_reservation_entries(items_details=items_details, notify=False)
 			created += len(items_details)
-			set_custom_status(so_doc)
 		except Exception:
 			frappe.log_error(title="FG Stock Reservation Manager: create failed for {0}".format(so))
 			skipped_sos.append(so)
@@ -390,6 +383,17 @@ def create_reservations(rows, filters=None):
 				others = _get_other_reservations(item_code, exclude_so=so)
 				if others:
 					blocked[item_code] = others
+
+	# Recompute status for the SOs that were actually reserved on - in its own
+	# pass, after the reservations themselves are done, so a status-layering
+	# hiccup can never be mistaken for (or interfere with) a reservation
+	# failure. recompute_for_sales_orders() already logs and swallows
+	# per-SO errors internally, so this can't raise.
+	succeeded_sos = [so for so in by_so if so not in skipped_sos]
+	if succeeded_sos:
+		from playground.playground.sales_order_status import recompute_for_sales_orders
+
+		recompute_for_sales_orders(succeeded_sos)
 
 	if skipped_sos:
 		frappe.msgprint(

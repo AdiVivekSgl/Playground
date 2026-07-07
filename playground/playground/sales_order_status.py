@@ -13,7 +13,17 @@ To Bill. If both conditions hold, Inspected wins.
 IMPORTANT - two call paths, both needed:
   1. The `doc_events` "on_update" hook (see hooks.py) catches a normal Sales
      Order save (e.g. a user manually attaches custom_inspection_report and
-     saves the form).
+     saves the form). on_update ALSO fires during the INITIAL submit
+     (Draft -> Submitted), not just later re-saves - at that exact moment,
+     doc.flags.ignore_validate_update_after_submit on our own doc instance
+     doesn't reliably protect us, because some ERPNext-internal call chain
+     triggered by set_status()/db_set() mid-submit can re-fetch or
+     re-validate a separate copy of the document that doesn't carry our
+     flag, raising "Not allowed to change ... after submission" right
+     alongside (not instead of) a successful submit. on_sales_order_update()
+     below is the actual hook target - it never lets that surface to the
+     user: any exception is logged and the recompute is retried once, out of
+     band, via a background job after this request's transaction is done.
   2. ERPNext frequently recomputes Sales Order status via
      `doc.set_status(update=True)` - a lightweight call that does its own
      db_set and does NOT go through a full validate()/on_update save cycle.
@@ -48,6 +58,23 @@ from frappe.utils import flt
 ELIGIBLE_BASE_STATUSES = {"To Deliver", "To Deliver and Bill"}
 STATUS_INSPECTED = "Inspected"
 STATUS_READY_FOR_DISPATCH = "Ready for Dispatch"
+
+
+def on_sales_order_update(doc, method=None):
+	"""The actual doc_events "on_update" target (see hooks.py) - never lets a
+	status-recompute failure surface as an error on top of a legitimate Sales
+	Order save/submit. If set_custom_status() throws (e.g. the mid-submit
+	validate_update_after_submit collision described in the module
+	docstring), log it and retry once in the background, safely outside this
+	request's own transaction, instead of propagating the exception."""
+	try:
+		set_custom_status(doc)
+	except Exception:
+		frappe.log_error(title="sales_order_status.on_sales_order_update: {0}".format(doc.name))
+		frappe.enqueue(
+			"playground.playground.sales_order_status.recompute_for_sales_orders",
+			sales_orders=[doc.name],
+		)
 
 
 def set_custom_status(doc, method=None):

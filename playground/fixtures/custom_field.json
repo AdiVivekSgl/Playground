@@ -24,6 +24,6 @@
   "insert_after": "note",
   "read_only": 1,
   "allow_on_submit": 1,
-  "description": "Populated automatically on Custom Exploded BOMs — comma-separated names of the Subassembly nodes that were kept aggregated (not exploded further) when this BOM was generated. Empty on fully-exploded and depth-level BOMs."
+  "description": "Populated automatically on every FG BOM generated from a Kit Content Mapping. \"Fully Exploded\" when the BOM is broken down to purchase-level items; otherwise \"From - <comma-separated names of the direct Subassemblies left unexploded as line items>\"."
  }
 ]

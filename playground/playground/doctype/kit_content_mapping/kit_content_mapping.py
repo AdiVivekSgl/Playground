@@ -304,11 +304,12 @@ class KitContentMapping(Document):
 		exploded build it's already been multiplied through every collapsed
 		level above it (see _explode_to_depth).
 
-		`explosion_level`: comma-separated names of Subassembly nodes that were
-		kept aggregated for this BOM (Custom Exploded BOMs only). Written to
-		the BOM's custom explosion_level field so the aggregation choices are
-		visible directly on the BOM document without having to cross-reference
-		the mapping. Empty string for fully-exploded and depth-level BOMs."""
+		`explosion_level`: value for the BOM's custom explosion_level field —
+		"Fully Exploded" when every component is a purchase-level leaf, else
+		"From - <direct subassemblies left as line items>" (see
+		_explosion_level_label). Written on every FG BOM this mapping generates
+		(L1, the depth levels, Fully Exploded, and Custom) so the explosion
+		state is visible on the BOM without cross-referencing the mapping."""
 		bom = frappe.new_doc("BOM")
 		bom.item = bom_item
 		bom.quantity = 1
@@ -338,6 +339,19 @@ class KitContentMapping(Document):
 		bom.insert()
 		return bom.name
 
+	def _explosion_level_label(self, component_rows):
+		"""Value for BOM.explosion_level, from the component lines of a generated
+		FG BOM: "Fully Exploded" when every line is a purchase-level leaf (no
+		Subassembly left as a line), else "From - <comma-separated node names of
+		the direct Subassemblies that remain unexploded as line items>"."""
+		subs = []
+		for row in component_rows:
+			if row.framework_node_type == "Subassembly" and row.node_name not in subs:
+				subs.append(row.node_name)
+		if not subs:
+			return _("Fully Exploded")
+		return _("From - {0}").format(", ".join(subs))
+
 	def _generate_bom_for_row(self, rows, target_row, is_default=False):
 		components = self._resolve_components(rows, target_row)
 		if not components:
@@ -358,7 +372,13 @@ class KitContentMapping(Document):
 		# is_default=True: this is "L1", the one BOM of the generated set that
 		# should actually be the Item's default for work orders/costing — the
 		# L2...Ln and Fully Exploded variants below are alternates only.
-		return self._build_bom(self.fg_item, pairs, rows, is_default=True)
+		return self._build_bom(
+			self.fg_item,
+			pairs,
+			rows,
+			is_default=True,
+			explosion_level=self._explosion_level_label(components),
+		)
 
 	def _explode_to_depth(self, rows, max_depth):
 		"""Walk the FG root's tree, multiplying quantities through each
@@ -395,7 +415,13 @@ class KitContentMapping(Document):
 
 	def _generate_level_bom(self, rows, max_depth, label):
 		lines = self._explode_to_depth(rows, max_depth)
-		bom_name = self._build_bom(self.fg_item, lines, rows, is_default=False)
+		bom_name = self._build_bom(
+			self.fg_item,
+			lines,
+			rows,
+			is_default=False,
+			explosion_level=self._explosion_level_label([row for row, _qty in lines]),
+		)
 		self.append("generated_boms", {"level_label": label, "bom": bom_name})
 		return bom_name
 
@@ -490,8 +516,11 @@ class KitContentMapping(Document):
 		if not self.fg_item:
 			frappe.throw(_("Set an FG Item before generating its BOM."))
 		rows = self._ordered_rows()
-		lines, kept_names = self._explode_selective(rows)
-		explosion_level = ", ".join(kept_names) if kept_names else ""
+		lines, _kept_names = self._explode_selective(rows)
+		# Same "Fully Exploded" / "From - <subassemblies>" label as the standard
+		# level BOMs — the kept-aggregated subassemblies are exactly the ones
+		# left as line items here.
+		explosion_level = self._explosion_level_label([row for row, _qty in lines])
 		bom_name = self._build_bom(
 			self.fg_item, lines, rows, is_default=False, explosion_level=explosion_level
 		)

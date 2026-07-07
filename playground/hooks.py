@@ -34,8 +34,11 @@ fixtures = [
 
 # Layers "Ready for Dispatch" / "Inspected" on top of Sales Order's own status
 # after core's own set_status() has run - see sales_order_status.py.
+# on_sales_order_update (not set_custom_status directly) so a recompute
+# failure - e.g. mid-submit - never surfaces as an error over a legitimate
+# Sales Order save/submit.
 doc_events = {
 	"Sales Order": {
-		"on_update": "playground.playground.sales_order_status.set_custom_status",
+		"on_update": "playground.playground.sales_order_status.on_sales_order_update",
 	}
 }

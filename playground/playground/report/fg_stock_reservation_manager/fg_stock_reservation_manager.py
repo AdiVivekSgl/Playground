@@ -363,6 +363,12 @@ def create_reservations(rows, filters=None):
 			{"sales_order_item": r.get("sales_order_item"), "qty_to_reserve": allowed, "warehouse": STOCK_WAREHOUSE}
 		)
 
+	# Deferred import - see sales_order_status.py's docstring for why this
+	# recompute is called explicitly here rather than relying on the Sales
+	# Order's own on_update doc_event (creating a Stock Reservation Entry
+	# doesn't put the Sales Order itself through a full save).
+	from playground.playground.sales_order_status import set_custom_status
+
 	created = 0
 	skipped_sos = []
 	blocked = {}
@@ -373,6 +379,7 @@ def create_reservations(rows, filters=None):
 			# reserves the given SO item lines in the given warehouse.
 			so_doc.create_stock_reservation_entries(items_details=items_details, notify=False)
 			created += len(items_details)
+			set_custom_status(so_doc)
 		except Exception:
 			frappe.log_error(title="FG Stock Reservation Manager: create failed for {0}".format(so))
 			skipped_sos.append(so)
@@ -427,14 +434,27 @@ def cancel_reservations(sre_names):
 		flat.extend([x for x in str(n).split(",") if x])
 
 	cancelled = 0
+	affected_sos = set()
 	for name in dict.fromkeys(flat):
 		if not frappe.db.exists("Stock Reservation Entry", name):
 			continue
 		doc = frappe.get_doc("Stock Reservation Entry", name)
+		if doc.voucher_type == "Sales Order":
+			affected_sos.add(doc.voucher_no)
 		if doc.docstatus == 1:
 			doc.cancel()
 		if frappe.db.exists("Stock Reservation Entry", name):
 			frappe.delete_doc("Stock Reservation Entry", name, force=True, ignore_permissions=False)
 		cancelled += 1
+
+	if affected_sos:
+		# Deferred import - see sales_order_status.py's docstring: cancelling
+		# a Stock Reservation Entry doesn't put the Sales Order itself through
+		# a full save, so its on_update doc_event won't reliably fire here.
+		# This also handles "un-setting" Ready for Dispatch if the SO no
+		# longer qualifies once the reservation is gone.
+		from playground.playground.sales_order_status import recompute_for_sales_orders
+
+		recompute_for_sales_orders(affected_sos)
 
 	return {"cancelled": cancelled}

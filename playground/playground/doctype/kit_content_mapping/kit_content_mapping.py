@@ -165,6 +165,19 @@ class KitContentMapping(Document):
 				children.append(row)
 		return children
 
+	def _subtree_rows(self, rows, target_row):
+		"""All descendant rows of target_row - its full subtree, not just
+		direct children - i.e. every row after it in idx-order until the next
+		row at the same or shallower indent level."""
+		idx = rows.index(target_row)
+		level = target_row.indent_level
+		descendants = []
+		for row in rows[idx + 1 :]:
+			if row.indent_level <= level:
+				break
+			descendants.append(row)
+		return descendants
+
 	def _resolve_components(self, rows, target_row):
 		"""Direct children of target_row, with Passthrough children exploded
 		recursively to their nearest real (Purchase/Subassembly) descendants —
@@ -245,6 +258,29 @@ class KitContentMapping(Document):
 		FG Item's own BOM is the same: it only needs the level-1 rows'
 		item codes, not whether those rows' own BOMs exist yet."""
 		rows = self._ordered_rows()
+
+		# Pre-flight: a Subassembly row with mapped children but no Item Code
+		# will eventually hit a generic "needs an Item Code" throw deep inside
+		# BOM building, possibly after other BOMs have already been created.
+		# Catch it here, up front, with one clear consolidated message and
+		# nothing generated at all - the client also pre-checks this before
+		# even calling here (see ensure_subassembly_item_codes in the client
+		# script) so this is the authoritative backstop, not the main UX.
+		missing_item_code = [
+			r for r in rows
+			if r.framework_node_type == "Subassembly" and not r.item_code and self._direct_children(rows, r)
+		]
+		if missing_item_code:
+			names = ", ".join(
+				"#{0} ({1})".format(r.idx, r.node_name) for r in missing_item_code
+			)
+			frappe.throw(
+				_(
+					"These Subassembly rows have child items mapped but no Item Code "
+					"yet - set an Item Code on each before generating BOMs: {0}"
+				).format(names)
+			)
+
 		created = []
 
 		if self.fg_item and not self.fg_bom:
@@ -659,6 +695,94 @@ class KitContentMapping(Document):
 		self.save()
 
 		return {"inserted": inserted_count, "unmatched": len(unmatched)}
+
+	# ------------------------------------------------------------------ #
+	# Compare BOM dialog: mapping's typed children vs an existing BOM's
+	# ------------------------------------------------------------------ #
+	@frappe.whitelist()
+	def compare_bom_children(self, row_name, bom_name=None):
+		"""Comparison data for the Compare BOM dialog: this row's currently
+		mapped direct children (item_code/qty as typed in the mapping) vs
+		bom_name's own top-level items. Falls back to the row's currently
+		linked BOM, then the item's default BOM, when bom_name isn't given.
+		Read-only - never saves anything."""
+		row = self._get_row(row_name)
+		rows = self._ordered_rows()
+
+		mapping_children = [
+			{"item_code": c.item_code, "qty": c.qty, "node_name": c.node_name}
+			for c in self._resolve_components(rows, row)
+			if c.item_code
+		]
+
+		bom_name = bom_name or row.bom or frappe.db.get_value(
+			"BOM",
+			{"item": row.item_code, "is_default": 1, "is_active": 1, "docstatus": 1},
+			"name",
+		)
+
+		bom_items = []
+		if bom_name:
+			bom_doc = frappe.get_doc("BOM", bom_name)
+			bom_items = [{"item_code": d.item_code, "qty": d.qty} for d in bom_doc.items]
+
+		return {"bom_name": bom_name, "mapping_children": mapping_children, "bom_items": bom_items}
+
+	@frappe.whitelist()
+	def use_existing_bom_for_row(self, row_name, bom_name):
+		""""Use Existing" outcome from the Compare BOM dialog: replaces this
+		row's ENTIRE subtree (its current mapped children, and anything
+		nested under them) with a flat set of rows built from bom_name's own
+		top-level items, and marks the row as Subassembly Existing against
+		that BOM. Destructive to whatever was typed under this row before -
+		the client warns before calling this."""
+		row = self._get_row(row_name)
+
+		bom_doc = frappe.get_doc("BOM", bom_name)
+		if bom_doc.item != row.item_code:
+			frappe.throw(
+				_(
+					"Row #{0} ({1}): {2} is a BOM for {3}, not {4}. Pick a BOM that "
+					"actually belongs to this row's Item Code."
+				).format(row.idx, row.node_name, bom_name, bom_doc.item, row.item_code)
+			)
+
+		rows = self._ordered_rows()
+		subtree = self._subtree_rows(rows, row)
+		subtree_names = {r.name for r in subtree}
+
+		final_rows = []
+		for r in rows:
+			if r.name in subtree_names:
+				continue  # drop the old subtree entirely
+			row_dict = r.as_dict()
+			row_dict.pop("idx", None)
+			if r.name == row.name:
+				row_dict["treatment"] = "Subassembly Existing"
+				row_dict["bom"] = bom_name
+			final_rows.append(row_dict)
+			if r.name == row.name:
+				for bom_item in bom_doc.items:
+					final_rows.append(
+						{
+							"node_name": None,
+							"indent_level": row.indent_level + 1,
+							"framework_node_type": "Purchase",
+							"treatment": "",
+							"item_code": bom_item.item_code,
+							"qty": bom_item.qty,
+							"uom": bom_item.uom
+							or frappe.db.get_value("Item", bom_item.item_code, "stock_uom"),
+						}
+					)
+
+		self.set("mapping_items", [])
+		for row_dict in final_rows:
+			self.append("mapping_items", row_dict)
+
+		self.flags.ignore_mandatory = True
+		self.save()
+		return {"replaced": len(subtree), "added": len(bom_doc.items)}
 
 	@frappe.whitelist()
 	def revert_to_original_bom(self):

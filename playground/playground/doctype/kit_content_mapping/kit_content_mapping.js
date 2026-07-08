@@ -1,3 +1,192 @@
+// Subassembly rows that have at least one mapped child row but no Item Code
+// yet — generating BOMs would eventually fail deep inside BOM building for
+// these, so we catch it up front instead.
+function get_subassembly_rows_missing_item_code(frm) {
+	const rows = (frm.doc.mapping_items || []).slice().sort((a, b) => a.idx - b.idx);
+	const missing = [];
+	rows.forEach((row, i) => {
+		if (row.framework_node_type !== "Subassembly" || row.item_code) return;
+		let has_child = false;
+		for (let j = i + 1; j < rows.length; j++) {
+			if (rows[j].indent_level <= row.indent_level) break;
+			if (rows[j].indent_level === row.indent_level + 1) {
+				has_child = true;
+				break;
+			}
+		}
+		if (has_child) missing.push(row);
+	});
+	return missing;
+}
+
+// Prompts for an Item Code on every Subassembly row that has mapped children
+// but none yet, before letting Generate BOMs proceed. Resolves immediately
+// (no prompt shown) if every such row already has an Item Code.
+function ensure_subassembly_item_codes(frm) {
+	const missing = get_subassembly_rows_missing_item_code(frm);
+	if (!missing.length) return Promise.resolve();
+
+	return new Promise((resolve) => {
+		frappe.prompt(
+			missing.map((row) => ({
+				fieldname: row.name,
+				label: __('Item Code for "{0}"', [row.node_name || row.name]),
+				fieldtype: "Link",
+				options: "Item",
+				reqd: 1,
+			})),
+			(values) => {
+				missing.forEach((row) => {
+					frappe.model.set_value(row.doctype, row.name, "item_code", values[row.name]);
+				});
+				frm.call({ method: "save_relaxed", doc: frm.doc }).then(() => resolve());
+			},
+			__("Enter Item Codes for Subassemblies with Mapped Children"),
+			__("Continue")
+		);
+	});
+}
+
+// Renders the mapping-vs-BOM comparison table into the dialog's HTML field.
+function render_bom_comparison(dialog, data) {
+	const mapping_children = data.mapping_children || [];
+	const bom_items = data.bom_items || [];
+	const bom_map = {};
+	bom_items.forEach((b) => (bom_map[b.item_code] = b));
+	const mapping_codes = new Set(mapping_children.map((m) => m.item_code));
+
+	const rows_html = [];
+	mapping_children.forEach((m) => {
+		const b = bom_map[m.item_code];
+		const match = b && Math.abs(flt(b.qty) - flt(m.qty)) < 0.0001;
+		rows_html.push(`
+			<tr style="${b ? "" : "background:#fdecea;"}">
+				<td>${frappe.utils.escape_html(m.item_code)}</td>
+				<td style="text-align:right">${m.qty}</td>
+				<td style="text-align:right">${b ? b.qty : "—"}</td>
+				<td>${b ? (match ? "Match" : "Qty differs") : "Only in mapping"}</td>
+			</tr>`);
+	});
+	bom_items.forEach((b) => {
+		if (!mapping_codes.has(b.item_code)) {
+			rows_html.push(`
+				<tr style="background:#fff8e1;">
+					<td>${frappe.utils.escape_html(b.item_code)}</td>
+					<td style="text-align:right">—</td>
+					<td style="text-align:right">${b.qty}</td>
+					<td>Only in BOM</td>
+				</tr>`);
+		}
+	});
+
+	const html = `
+		<table class="table table-bordered" style="font-size:12px;">
+			<thead>
+				<tr><th>Item Code</th><th style="text-align:right">Mapping Qty</th><th style="text-align:right">BOM Qty</th><th>Status</th></tr>
+			</thead>
+			<tbody>${rows_html.join("") || '<tr><td colspan="4">No components on either side.</td></tr>'}</tbody>
+		</table>`;
+
+	dialog.fields_dict.comparison_html.$wrapper.html(html);
+}
+
+// Compare BOM dialog for a Subassembly row: shows the mapping's typed
+// children next to an existing BOM's items, then lets the user resolve the
+// row's Treatment as Subassembly Existing (replacing the mapped children
+// with the BOM's own items, after a warning), Subassembly New, or Passthrough.
+function open_compare_bom_dialog(frm, row) {
+	if (!row.item_code) {
+		frappe.msgprint(__("Set an Item Code on this row before comparing against a BOM."));
+		return;
+	}
+
+	const dialog = new frappe.ui.Dialog({
+		title: __('Compare BOM — "{0}"', [row.node_name || row.item_code]),
+		size: "large",
+		fields: [
+			{
+				fieldname: "bom_name",
+				fieldtype: "Link",
+				label: __("Compare Against BOM"),
+				options: "BOM",
+				default: row.bom || "",
+				get_query: () => ({
+					filters: { item: row.item_code, is_active: 1, docstatus: 1 },
+				}),
+			},
+			{ fieldname: "comparison_html", fieldtype: "HTML" },
+		],
+		primary_action_label: __("Compare"),
+		primary_action: (values) => {
+			if (!values.bom_name) {
+				frappe.msgprint(__("Select a BOM to compare against."));
+				return;
+			}
+			frm.call("compare_bom_children", { row_name: row.name, bom_name: values.bom_name }).then((r) => {
+				render_bom_comparison(dialog, r.message || {});
+			});
+		},
+	});
+
+	// Three mutually exclusive outcomes — frappe.ui.Dialog only supports one
+	// primary + one secondary action, so these are appended directly.
+	const footer = dialog.$wrapper.find(".modal-footer");
+
+	const make_btn = (label, cls, handler) => {
+		const $btn = $(`<button class="btn ${cls} btn-sm">${label}</button>`).on("click", handler);
+		footer.prepend($btn);
+		return $btn;
+	};
+
+	make_btn(__("Passthrough"), "btn-default", () => {
+		frappe.model.set_value(row.doctype, row.name, "treatment", "Passthrough");
+		frappe.model.set_value(row.doctype, row.name, "item_code", "");
+		frappe.model.set_value(row.doctype, row.name, "bom", "");
+		dialog.hide();
+		frm.refresh_field("mapping_items");
+	});
+
+	make_btn(__("Use New"), "btn-default", () => {
+		frappe.model.set_value(row.doctype, row.name, "treatment", "Subassembly New");
+		frappe.model.set_value(row.doctype, row.name, "bom", "");
+		dialog.hide();
+		frm.refresh_field("mapping_items");
+	});
+
+	make_btn(__("Use Existing"), "btn-danger", () => {
+		const bom_name = dialog.get_value("bom_name");
+		if (!bom_name) {
+			frappe.msgprint(__("Select a BOM first."));
+			return;
+		}
+		frappe.confirm(
+			__(
+				"This will REPLACE this row's current child items in the mapping with {0}'s own items. This cannot be undone. Continue?",
+				[bom_name]
+			),
+			() => {
+				frm.call("use_existing_bom_for_row", { row_name: row.name, bom_name: bom_name }).then(() => {
+					dialog.hide();
+					frappe.show_alert({
+						message: __("Children replaced from {0}.", [bom_name]),
+						indicator: "green",
+					});
+					frm.reload_doc();
+				});
+			}
+		);
+	});
+
+	dialog.show();
+
+	// Auto-run the comparison once immediately if a BOM is already known.
+	if (row.bom) {
+		frm.call("compare_bom_children", { row_name: row.name, bom_name: row.bom }).then((r) => {
+			render_bom_comparison(dialog, r.message || {});
+		});
+	}
+}
+
 function show_explosion_dialog(title, lines) {
 	if (!lines.length) {
 		frappe.msgprint(
@@ -118,25 +307,27 @@ frappe.ui.form.on("Kit Content Mapping", {
 		});
 
 		frm.add_custom_button(__("Generate BOMs"), () => {
-			frm.call({ method: "generate_pending_boms", doc: frm.doc }).then((r) => {
-				const created = r.message || [];
-				if (created.length) {
-					frappe.show_alert({
-						message: __(
-							"Created {0} BOM(s) — including the FG Item's full level set (L1 default, plus alternates) where applicable.",
-							[created.length]
-						),
-						indicator: "green",
-					});
-					frm.reload_doc();
-				} else {
-					frappe.show_alert({
-						message: __(
-							"Nothing to generate — the FG Item's BOM set already exists and every Subassembly New row already has one too, or none are mapped yet."
-						),
-						indicator: "blue",
-					});
-				}
+			ensure_subassembly_item_codes(frm).then(() => {
+				frm.call({ method: "generate_pending_boms", doc: frm.doc }).then((r) => {
+					const created = r.message || [];
+					if (created.length) {
+						frappe.show_alert({
+							message: __(
+								"Created {0} BOM(s) — including the FG Item's full level set (L1 default, plus alternates) where applicable.",
+								[created.length]
+							),
+							indicator: "green",
+						});
+						frm.reload_doc();
+					} else {
+						frappe.show_alert({
+							message: __(
+								"Nothing to generate — the FG Item's BOM set already exists and every Subassembly New row already has one too, or none are mapped yet."
+							),
+							indicator: "blue",
+						});
+					}
+				});
 			});
 		});
 
@@ -244,6 +435,11 @@ frappe.ui.form.on("Kit Content Mapping", {
 });
 
 frappe.ui.form.on("Kit Content Mapping Item", {
+	compare_bom(frm, cdt, cdn) {
+		const row = locals[cdt][cdn];
+		open_compare_bom_dialog(frm, row);
+	},
+
 	unlock_components(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
 		if (!row.unlock_components) return;

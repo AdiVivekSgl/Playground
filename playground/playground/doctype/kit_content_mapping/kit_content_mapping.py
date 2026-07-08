@@ -867,3 +867,88 @@ class KitContentMapping(Document):
 			self.append("mapping_items", row_dict)
 		self.save()
 		return extra_codes
+
+	# ------------------------------------------------------------------ #
+	# Delete BOMs this mapping generated, without deleting the mapping
+	# ------------------------------------------------------------------ #
+	def _linked_boms(self):
+		"""Every BOM this mapping points at: the FG BOM (L1 default), the
+		generated alternate-level BOMs, and any BOM linked on a mapping row.
+		De-duplicated, order preserved (FG BOM first)."""
+		names = []
+		if self.fg_bom:
+			names.append(self.fg_bom)
+		for d in self.generated_boms:
+			if d.bom:
+				names.append(d.bom)
+		for r in self.mapping_items:
+			if r.bom:
+				names.append(r.bom)
+		return list(dict.fromkeys(names))
+
+	@frappe.whitelist()
+	def delete_generated_boms(self, bom_names):
+		"""Delete BOMs that were generated from / linked to this mapping WITHOUT
+		deleting the mapping itself. Link integrity would normally block the BOM
+		deletion (the mapping's fg_bom / generated_boms / row.bom fields point at
+		it), so we UNLINK every reference on this mapping first, save, then cancel
+		(if submitted) and delete each BOM. Cancelling/deleting can still fail for
+		reasons outside this mapping - the BOM is a default with no replacement,
+		is used as a sub-assembly in another active BOM, or has stock/Work Order
+		transactions - so failures are collected per BOM and returned rather than
+		aborting the whole batch."""
+		if not frappe.has_permission("BOM", "delete"):
+			frappe.throw(_("You are not permitted to delete BOMs."), frappe.PermissionError)
+
+		bom_names = frappe.parse_json(bom_names) if isinstance(bom_names, str) else (bom_names or [])
+		bom_names = [b for b in bom_names if b]
+		if not bom_names:
+			frappe.throw(_("No BOMs selected to delete."))
+
+		# Only ever act on BOMs actually linked to THIS mapping - this
+		# whitelisted method must not become a way to delete arbitrary BOMs by
+		# name; it only removes the ones this mapping itself generated/links.
+		linked = set(self._linked_boms())
+		unrelated = [b for b in bom_names if b not in linked]
+		if unrelated:
+			frappe.throw(
+				_("These BOMs aren't linked to this mapping, so they can't be deleted from here: {0}").format(
+					", ".join(unrelated)
+				)
+			)
+
+		# 1. Unlink every reference to these BOMs on THIS mapping, then save, so
+		#    link integrity no longer blocks the BOM deletion below.
+		targets = set(bom_names)
+		if self.fg_bom in targets:
+			self.fg_bom = None
+		self.set("generated_boms", [d for d in self.generated_boms if d.bom not in targets])
+		for r in self.mapping_items:
+			if r.bom in targets:
+				r.bom = None
+		self.flags.ignore_mandatory = True
+		self.save()
+
+		# 2. Cancel (if submitted) + delete each BOM, collecting per-BOM failures.
+		deleted = []
+		failed = {}
+		for name in bom_names:
+			try:
+				if not frappe.db.exists("BOM", name):
+					deleted.append(name)  # already gone - treat as done
+					continue
+				bom = frappe.get_doc("BOM", name)
+				# A default/active BOM can't be deleted as-is; clear those flags
+				# first (cancel also does, but a not-yet-submitted default needs it).
+				if bom.is_default or bom.is_active:
+					frappe.db.set_value("BOM", name, {"is_default": 0, "is_active": 0})
+					bom.reload()
+				if bom.docstatus == 1:
+					bom.cancel()
+				frappe.delete_doc("BOM", name)
+				deleted.append(name)
+			except Exception as e:
+				failed[name] = str(e)
+				frappe.log_error(title="Kit Content Mapping: delete BOM failed for {0}".format(name))
+
+		return {"deleted": deleted, "failed": failed}

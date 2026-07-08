@@ -250,6 +250,108 @@ function style_node_column(frm) {
 	grid.refresh();
 }
 
+// Every BOM this mapping points at, as {bom, label} - FG BOM (L1 default), the
+// generated alternate-level BOMs, and any BOM linked on a mapping row. Mirrors
+// the server-side _linked_boms(); de-duplicated, FG BOM first.
+function collect_linked_boms(frm) {
+	const seen = new Set();
+	const out = [];
+	const add = (bom, label) => {
+		if (bom && !seen.has(bom)) {
+			seen.add(bom);
+			out.push({ bom, label });
+		}
+	};
+	add(frm.doc.fg_bom, __("FG BOM (L1, default)"));
+	(frm.doc.generated_boms || []).forEach((d) => add(d.bom, d.level_label || __("Alternate level")));
+	(frm.doc.mapping_items || []).forEach((r) => {
+		if (r.bom) add(r.bom, __("On row: {0}", [r.node_name || r.item_code || r.bom]));
+	});
+	return out;
+}
+
+function open_delete_boms_dialog(frm) {
+	const boms = collect_linked_boms(frm);
+	if (!boms.length) {
+		frappe.msgprint(__("This mapping isn't linked to any BOMs."));
+		return;
+	}
+
+	const rows_html = boms
+		.map(
+			(b, i) => `
+			<tr>
+				<td><input type="checkbox" data-bom="${frappe.utils.escape_html(b.bom)}" /></td>
+				<td>${frappe.utils.escape_html(b.bom)}</td>
+				<td>${frappe.utils.escape_html(b.label)}</td>
+			</tr>`
+		)
+		.join("");
+
+	const html = `
+		<p>${__("Tick the BOMs to delete. They'll be unlinked from this Kit Content Mapping and then cancelled &amp; deleted. The mapping itself is kept.")}</p>
+		<table class="table table-bordered" style="font-size:12px;">
+			<thead><tr><th style="width:32px;"></th><th>${__("BOM")}</th><th>${__("Linked as")}</th></tr></thead>
+			<tbody>${rows_html}</tbody>
+		</table>`;
+
+	const dialog = new frappe.ui.Dialog({
+		title: __("Delete Generated BOMs"),
+		size: "large",
+		fields: [{ fieldtype: "HTML", options: html }],
+		primary_action_label: __("Delete Selected"),
+		primary_action() {
+			const selected = Array.from(
+				dialog.$wrapper[0].querySelectorAll('input[type="checkbox"]:checked')
+			).map((el) => el.getAttribute("data-bom"));
+
+			if (!selected.length) {
+				frappe.msgprint(__("Tick at least one BOM to delete."));
+				return;
+			}
+
+			frappe.confirm(
+				__(
+					"Permanently cancel &amp; delete {0} BOM(s)? This can't be undone. Any BOM that's a default without a replacement, used in another active BOM, or tied to stock/Work Order transactions will be reported as skipped.",
+					[selected.length]
+				),
+				() => {
+					dialog.hide();
+					frm.call({
+						method: "delete_generated_boms",
+						doc: frm.doc,
+						args: { bom_names: JSON.stringify(selected) },
+						freeze: true,
+						freeze_message: __("Deleting BOMs…"),
+					}).then((r) => {
+						const m = r.message || {};
+						const failed = m.failed || {};
+						const failed_names = Object.keys(failed);
+						frappe.show_alert({
+							message: __("Deleted {0} BOM(s); {1} skipped.", [
+								(m.deleted || []).length,
+								failed_names.length,
+							]),
+							indicator: failed_names.length ? "orange" : "green",
+						});
+						if (failed_names.length) {
+							frappe.msgprint({
+								title: __("Some BOMs couldn't be deleted"),
+								message: failed_names
+									.map((n) => `<b>${frappe.utils.escape_html(n)}</b>: ${frappe.utils.escape_html(failed[n])}`)
+									.join("<br>"),
+								indicator: "orange",
+							});
+						}
+						frm.reload_doc();
+					});
+				}
+			);
+		},
+	});
+	dialog.show();
+}
+
 frappe.ui.form.on("Kit Content Mapping", {
 	refresh(frm) {
 		style_node_column(frm);
@@ -360,6 +462,15 @@ frappe.ui.form.on("Kit Content Mapping", {
 				}
 			});
 		});
+
+		// ── Delete generated / linked BOMs (without deleting this mapping) ──
+		if (!frm.is_new() && collect_linked_boms(frm).length) {
+			frm.add_custom_button(
+				__("Delete Generated BOMs"),
+				() => open_delete_boms_dialog(frm),
+				__("BOMs")
+			);
+		}
 	},
 
 	kit_content_framework(frm) {

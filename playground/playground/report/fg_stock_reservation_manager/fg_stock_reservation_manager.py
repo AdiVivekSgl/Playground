@@ -80,6 +80,12 @@ def execute(filters=None):
 	stock_map = get_stock_map(fg_items)
 	item_map = get_item_map(fg_items)
 
+	# Item-level reservation totals + per-customer breakdown, honouring the
+	# Unreserved Stock Basis toggle (All Reservations vs Only Displayed SOs).
+	item_reservations = get_item_reservation_breakdown(
+		fg_items, filters.get("unreserved_basis") or "All Reservations", sos
+	)
+
 	# "Date" column shows the SO date chosen by the Date Basis dropdown.
 	so_date_map = _get_so_date_map(sos, filters.get("date_basis"))
 
@@ -144,6 +150,8 @@ def execute(filters=None):
 		# subtracts free stock/buffer.
 		short_to_complete = max(0.0, outstanding)
 
+		breakdown = item_reservations.get(r.item_code) or {"total": 0.0, "by_customer": {}}
+
 		data.append(
 			{
 				"item_code": r.item_code,
@@ -154,6 +162,8 @@ def execute(filters=None):
 				"sales_order_item": r.so_item,
 				"pending_qty": pending,
 				"reserved_qty": reserved,
+				"total_reserved_qty": flt(breakdown["total"]),
+				"reserved_by_customer": _format_customer_breakdown(breakdown["by_customer"]),
 				"short_to_complete": short_to_complete,
 				"item_free_stock": item_free_stock_map.get(r.item_code, 0.0),
 				"reservable_now": reservable,
@@ -216,9 +226,16 @@ def get_columns():
 		{"label": _("Dispatch Priority Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 150},
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
+		# Item-level totals (repeated on every line of the same item), honouring
+		# the Unreserved Stock Basis toggle - total reserved against Sales Orders
+		# and the same figure broken down per customer.
+		{"label": _("Total Reserved Qty"), "fieldname": "total_reserved_qty", "fieldtype": "Float", "width": 140},
+		{"label": _("Reserved by Customer"), "fieldname": "reserved_by_customer", "fieldtype": "Data", "width": 280},
 		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
 		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
-		{"label": _("Reservable Qty"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130},
+		# Kept in the row data (used to cap the editable To Reserve Qty client-side)
+		# but hidden from view per request.
+		{"label": _("Reservable Qty"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130, "hidden": 1},
 		{"label": _("To Reserve Qty"), "fieldname": "reserve_qty", "fieldtype": "Float", "width": 130},
 		{"label": _("FG Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "hidden": 1, "width": 120},
 		{"label": _("SO Item"), "fieldname": "sales_order_item", "fieldtype": "Data", "hidden": 1, "width": 100},
@@ -265,6 +282,65 @@ def get_line_reserved_map(so_item_names):
 		entry.reserved_qty += flt(r.reserved_qty)
 		entry.sre_names.append(r.sre_name)
 	return out
+
+
+def get_item_reservation_breakdown(items, unreserved_basis, displayed_sos):
+	"""Per FG item: the total qty reserved against Sales Orders in
+	STOCK_WAREHOUSE, plus a per-customer breakdown, honouring the Unreserved
+	Stock Basis toggle:
+	  All Reservations   -> every active SO reservation for the item
+	  Only Displayed SOs -> only reservations tied to the SOs currently shown
+	Returns {item_code: {"total": qty, "by_customer": {customer_name: qty}}}."""
+	if not items or not frappe.db.table_exists("Stock Reservation Entry"):
+		return {}
+
+	params = {"items": items, "warehouse": STOCK_WAREHOUSE}
+	so_condition = ""
+	if unreserved_basis == "Only Displayed SOs":
+		if not displayed_sos:
+			return {}
+		so_condition = "AND sre.voucher_no IN %(sos)s"
+		params["sos"] = displayed_sos
+
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			sre.item_code AS item_code,
+			COALESCE(NULLIF(cust.customer_name, ''), so.customer) AS customer_name,
+			SUM(sre.reserved_qty) AS reserved_qty
+		FROM `tabStock Reservation Entry` sre
+		INNER JOIN `tabSales Order` so ON so.name = sre.voucher_no
+		LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
+		WHERE sre.docstatus = 1
+			AND sre.voucher_type = 'Sales Order'
+			AND sre.warehouse = %(warehouse)s
+			AND sre.item_code IN %(items)s
+			{so_condition}
+		GROUP BY sre.item_code, customer_name
+		""".format(so_condition=so_condition),
+		params,
+		as_dict=True,
+	)
+
+	out = {}
+	for r in rows:
+		entry = out.setdefault(r.item_code, {"total": 0.0, "by_customer": {}})
+		qty = flt(r.reserved_qty)
+		if qty <= 0:
+			continue
+		entry["total"] += qty
+		name = r.customer_name or _("Unknown")
+		entry["by_customer"][name] = entry["by_customer"].get(name, 0.0) + qty
+	return out
+
+
+def _format_customer_breakdown(by_customer):
+	"""'Jagmal(3), SS Ent(19), Adhya(5)' - customers with a reservation for the
+	item, biggest first, qty in brackets (trailing '.0' trimmed)."""
+	if not by_customer:
+		return ""
+	pairs = sorted(by_customer.items(), key=lambda kv: kv[1], reverse=True)
+	return ", ".join("{0}({1})".format(name, "%g" % flt(qty)) for name, qty in pairs)
 
 
 # --------------------------------------------------------------------------- #

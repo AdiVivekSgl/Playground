@@ -61,6 +61,7 @@ from playground.playground.report.production_requirement_report.production_requi
 	get_stock_map,
 	get_reserved_in_stock_warehouse_map,
 	get_item_map,
+	compute_so_qualification_flags,
 	_get_so_header_map,
 	_resolve_date_field,
 )
@@ -186,14 +187,11 @@ def execute(filters=None):
 	#                           AND at least one line still has a shortfall — SOs
 	#                           already fully covered belong to Ready to Dispatch,
 	#                           not here.
-	so_ok = {}
-	for row in data:
-		so = row["sales_order"]
-		short = flt(row["short_to_complete"])
-		free = flt(row["item_free_stock"])
-		prev = so_ok.setdefault(so, {"ready": True, "coverable": True})
-		prev["ready"] = prev["ready"] and short <= 0.0001
-		prev["coverable"] = prev["coverable"] and short <= free
+	# Shared with Sales Order.custom_material_status so the two never drift. In a
+	# view, only_unreserved is forced off above, so `data` holds every line of
+	# each SO here - iterating so_items gives the same per-SO rollup, using the
+	# same item_free_stock_map (already on the report's Unreserved Stock Basis).
+	so_ok = compute_so_qualification_flags(so_items, line_reserved, item_free_stock_map)
 
 	if view_mode == "ready_to_dispatch":
 		qualifying_sos = {so for so, flags in so_ok.items() if flags["ready"]}

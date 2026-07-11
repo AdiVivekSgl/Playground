@@ -469,6 +469,33 @@ def _resolve_date_field(date_basis):
 	return field
 
 
+def compute_so_qualification_flags(so_items, line_reserved, item_free_stock_map):
+	"""For each Sales Order: whether EVERY line is fully reserved (`ready`) and
+	whether EVERY line's shortfall is coverable by that item's free stock
+	(`coverable`). Single source of truth for FGSRM's "Ready to Dispatch" /
+	"Possible to Complete" view filters AND Sales Order.custom_material_status,
+	so the live report and the stored field can never drift apart.
+
+	Per line: short = max(0, pending_qty - reserved_qty), free = the item's free
+	stock from `item_free_stock_map`. Rollup uses the same "true only if true for
+	every line" convention and the same 0.0001 tolerance FGSRM used inline.
+
+	Returns {sales_order: {"ready": bool, "coverable": bool}}.
+	"""
+	so_ok = {}
+	for r in so_items:
+		res = line_reserved.get(r.so_item) or frappe._dict()
+		reserved = flt(res.get("reserved_qty"))
+		pending = flt(r.pending_qty)
+		short = max(0.0, pending - reserved)
+		free = flt(item_free_stock_map.get(r.item_code, 0.0))
+
+		prev = so_ok.setdefault(r.sales_order, {"ready": True, "coverable": True})
+		prev["ready"] = prev["ready"] and short <= 0.0001
+		prev["coverable"] = prev["coverable"] and short <= free
+	return so_ok
+
+
 def get_open_so_items(filters):
 	conditions = ""
 	values = {"statuses": OPEN_SO_STATUSES}
@@ -482,6 +509,12 @@ def get_open_so_items(filters):
 	if filters.get("item_code"):
 		conditions += " AND soi.item_code = %(item_code)s"
 		values["item_code"] = filters.get("item_code")
+
+	# Scoped single-SO recompute (Material Status) reuses this same query rather
+	# than re-querying the whole open-SO universe for one document.
+	if filters.get("sales_order"):
+		conditions += " AND soi.parent = %(sales_order)s"
+		values["sales_order"] = filters.get("sales_order")
 
 	if filters.get("customer"):
 		conditions += " AND so.customer = %(customer)s"

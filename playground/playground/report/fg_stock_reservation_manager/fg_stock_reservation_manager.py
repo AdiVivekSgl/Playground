@@ -223,8 +223,10 @@ def execute(filters=None):
 		row["so_group_first"] = row["sales_order"] != last_so
 		last_so = row["sales_order"]
 
+	group_by_so = cint(filters.get("group_by_so"))
+
 	if not view_mode:
-		return get_columns(), data
+		return get_columns(), _collapse_by_so(data) if group_by_so else data
 
 	# Evaluate per-SO qualification across ALL of that SO's lines (only_unreserved
 	# was forced off above, so `data` already holds every line for each SO here).
@@ -247,7 +249,42 @@ def execute(filters=None):
 		qualifying_sos = {
 			so for so, flags in so_ok.items() if flags["coverable"] and not flags["ready"]
 		}
-	return get_columns(), [row for row in data if row["sales_order"] in qualifying_sos]
+	filtered = [row for row in data if row["sales_order"] in qualifying_sos]
+	return get_columns(), _collapse_by_so(filtered) if group_by_so else filtered
+
+
+def _collapse_by_so(rows):
+	"""Collapse per-line rows to one summary row per Sales Order for the "Group by
+	Sales Order" toggle: Pending Qty, Reserved Qty and Suggested Prodn are summed
+	across the SO's item lines; the SO-level identity fields (SO, Customer,
+	Dispatch Priority Date) carry through; every item-level column is left blank.
+	SO order is preserved from the incoming (already date-sorted) rows.
+
+	This is a read-only summary - a collapsed row has no sales_order_item, so the
+	per-line Create/Cancel/Reserve actions no-op on it (by design)."""
+	out = []
+	index = {}
+	for r in rows:
+		so = r.get("sales_order")
+		agg = index.get(so)
+		if agg is None:
+			agg = {
+				"sales_order": so,
+				"customer": r.get("customer"),
+				"so_date": r.get("so_date"),
+				"pending_qty": 0.0,
+				"reserved_qty": 0.0,
+				"suggested_prodn": 0.0,
+				# Each collapsed row is its own group, so the client formatter's
+				# repeat-blanking never fires and the group border shows per SO.
+				"so_group_first": True,
+			}
+			index[so] = agg
+			out.append(agg)
+		agg["pending_qty"] += flt(r.get("pending_qty"))
+		agg["reserved_qty"] += flt(r.get("reserved_qty"))
+		agg["suggested_prodn"] += flt(r.get("suggested_prodn"))
+	return out
 
 
 def get_columns():

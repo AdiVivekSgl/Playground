@@ -165,10 +165,11 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			label: __("Group by Sales Order"),
 			fieldtype: "Check",
 			default: 0,
-			// Rows are always ordered so a SO's lines are adjacent; this toggle
-			// just blanks the repeated SO/Customer/Date text on later lines of
-			// the same SO for a cleaner grouped look. The underlying row data
-			// (used by Create/Cancel/Select) is never touched.
+			// Collapses the report server-side to one summary row per Sales Order:
+			// Pending Qty, Reserved Qty and Suggested Prodn are totalled across the
+			// SO's items; SO / Customer / Dispatch Priority Date carry through; all
+			// item-level columns are blank. A read-only summary — the per-line
+			// Create/Cancel/Reserve actions don't apply to a collapsed row.
 		},
 	],
 

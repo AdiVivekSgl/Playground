@@ -153,6 +153,12 @@ def execute(filters=None):
 
 		breakdown = item_reservations.get(r.item_code) or {"total": 0.0, "by_customer": {}}
 
+		# Suggested Prodn = shortfall not coverable by this item's free stock =
+		# max(0, Short to Complete − Item Free Stock) — mirrors the PRR's
+		# "Required to Produce" netting, computed from the two adjacent columns.
+		this_item_free = flt(item_free_stock_map.get(r.item_code, 0.0))
+		suggested_prodn = max(0.0, short_to_complete - this_item_free)
+
 		data.append(
 			{
 				"item_code": r.item_code,
@@ -163,10 +169,11 @@ def execute(filters=None):
 				"sales_order_item": r.so_item,
 				"pending_qty": pending,
 				"reserved_qty": reserved,
-				"total_reserved_qty": flt(breakdown["total"]),
-				"reserved_by_customer": _format_customer_breakdown(breakdown["by_customer"]),
 				"short_to_complete": short_to_complete,
 				"item_free_stock": item_free_stock_map.get(r.item_code, 0.0),
+				"suggested_prodn": suggested_prodn,
+				"total_reserved_qty": flt(breakdown["total"]),
+				"reserved_by_customer": _format_customer_breakdown(breakdown["by_customer"]),
 				"reservable_now": reservable,
 				"reserve_qty": reservable,
 				"existing_sre": ",".join(res.get("sre_names") or []),
@@ -224,13 +231,16 @@ def get_columns():
 		{"label": _("Dispatch Priority Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 150},
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
+		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
+		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
+		# Suggested Prodn = the shortfall that free stock can't cover, i.e. what
+		# still needs to be manufactured = max(0, Short to Complete − Item Free Stock).
+		{"label": _("Suggested Prodn"), "fieldname": "suggested_prodn", "fieldtype": "Float", "width": 130},
 		# Item-level totals (repeated on every line of the same item), honouring
 		# the Unreserved Stock Basis toggle - total reserved against Sales Orders
 		# and the same figure broken down per customer.
 		{"label": _("Total Reserved Qty"), "fieldname": "total_reserved_qty", "fieldtype": "Float", "width": 140},
 		{"label": _("Reserved by Customer"), "fieldname": "reserved_by_customer", "fieldtype": "Data", "width": 280},
-		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
-		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
 		# Kept in the row data (used to cap the editable To Reserve Qty client-side)
 		# but hidden from view per request.
 		{"label": _("Reservable Qty"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130, "hidden": 1},

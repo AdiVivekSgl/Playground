@@ -51,7 +51,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate
+from frappe.utils import cint, flt, getdate, nowdate
 from datetime import date
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
@@ -65,6 +65,37 @@ from playground.playground.report.production_requirement_report.production_requi
 	_get_so_header_map,
 	_resolve_date_field,
 )
+
+# --------------------------------------------------------------------------- #
+# Integration with the site's custom Production Plan subsystem (separate app).
+#
+# "Create Prodn Plan" hands the plan off to that app's nested-hierarchy feature
+# instead of stock ERPNext routines, so the plan is created the way that app
+# expects: custom_purpose drives naming/submit, custom_display_zero_value is the
+# real "Display Zero Value" field, and create_full_hierarchy builds the linked
+# child-plan chain that MR Hierarchy Excel later flattens.
+#
+# Set FROTEC_PP_MODULE to that app's Production Plan module (dotted path) to
+# enable the automatic Get-Raw-Materials + full-chain build. Left None, the
+# button still creates a correctly-tagged root DRAFT and asks the user to click
+# the app's own "Create Full Chain" button - never falling back to the stock
+# mechanisms, which don't integrate with that app.
+FROTEC_PP_MODULE = "frontec.doc_event.production_plan.production_plan"
+FROTEC_GET_ITEMS_FN = "trigger_get_item_for_mr"   # seeds the root's mr_items
+FROTEC_FULL_CHAIN_FN = "create_full_hierarchy"    # builds the nested plan chain
+# custom_purpose for the FGSRM-created root plan (decided with the user).
+FGSRM_PLAN_PURPOSE = "Planning"
+
+
+def _frotec_attr(name):
+	"""Resolve a callable in the custom Production Plan app, or None if that app
+	/ path isn't configured or present on this site."""
+	if not FROTEC_PP_MODULE:
+		return None
+	try:
+		return frappe.get_attr("{0}.{1}".format(FROTEC_PP_MODULE, name))
+	except Exception:
+		return None
 
 
 def execute(filters=None):
@@ -153,6 +184,12 @@ def execute(filters=None):
 
 		breakdown = item_reservations.get(r.item_code) or {"total": 0.0, "by_customer": {}}
 
+		# Suggested Prodn = shortfall not coverable by this item's free stock =
+		# max(0, Short to Complete − Item Free Stock) — mirrors the PRR's
+		# "Required to Produce" netting, computed from the two adjacent columns.
+		this_item_free = flt(item_free_stock_map.get(r.item_code, 0.0))
+		suggested_prodn = max(0.0, short_to_complete - this_item_free)
+
 		data.append(
 			{
 				"item_code": r.item_code,
@@ -163,10 +200,11 @@ def execute(filters=None):
 				"sales_order_item": r.so_item,
 				"pending_qty": pending,
 				"reserved_qty": reserved,
-				"total_reserved_qty": flt(breakdown["total"]),
-				"reserved_by_customer": _format_customer_breakdown(breakdown["by_customer"]),
 				"short_to_complete": short_to_complete,
 				"item_free_stock": item_free_stock_map.get(r.item_code, 0.0),
+				"suggested_prodn": suggested_prodn,
+				"total_reserved_qty": flt(breakdown["total"]),
+				"reserved_by_customer": _format_customer_breakdown(breakdown["by_customer"]),
 				"reservable_now": reservable,
 				"reserve_qty": reservable,
 				"existing_sre": ",".join(res.get("sre_names") or []),
@@ -224,13 +262,16 @@ def get_columns():
 		{"label": _("Dispatch Priority Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 150},
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
+		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
+		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
+		# Suggested Prodn = the shortfall that free stock can't cover, i.e. what
+		# still needs to be manufactured = max(0, Short to Complete − Item Free Stock).
+		{"label": _("Suggested Prodn"), "fieldname": "suggested_prodn", "fieldtype": "Float", "width": 130},
 		# Item-level totals (repeated on every line of the same item), honouring
 		# the Unreserved Stock Basis toggle - total reserved against Sales Orders
 		# and the same figure broken down per customer.
 		{"label": _("Total Reserved Qty"), "fieldname": "total_reserved_qty", "fieldtype": "Float", "width": 140},
 		{"label": _("Reserved by Customer"), "fieldname": "reserved_by_customer", "fieldtype": "Data", "width": 280},
-		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
-		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
 		# Kept in the row data (used to cap the editable To Reserve Qty client-side)
 		# but hidden from view per request.
 		{"label": _("Reservable Qty"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130, "hidden": 1},
@@ -512,3 +553,188 @@ def cancel_reservations(sre_names):
 		cancelled += 1
 
 	return {"cancelled": cancelled}
+
+
+# --------------------------------------------------------------------------- #
+# Create Production Plan (from Suggested Prodn)
+# --------------------------------------------------------------------------- #
+
+def _suggested_prodn_by_item(filters):
+	"""Itemwise Suggested Prodn for the current filters = max(0, Σ Short to
+	Complete − Item Free Stock), computed once per item.
+
+	NB: this aggregates at the ITEM level rather than naively summing the
+	per-line "Suggested Prodn" column - free stock is shared across an item's SO
+	lines, so summing the per-line figure (which subtracts the full free stock on
+	every line) would misstate the true net requirement. Same demand/free-stock
+	inputs and Unreserved Stock Basis as the report, so the totals reconcile with
+	what's on screen. Only the item/customer/date filters apply here (the
+	only_unreserved / view_mode display toggles don't change true open demand).
+
+	Returns {item_code: qty} for items with a positive requirement."""
+	so_items = get_open_so_items(filters)
+	if not so_items:
+		return {}
+
+	fg_items = sorted(set(r.item_code for r in so_items))
+	sos = sorted(set(r.sales_order for r in so_items))
+	line_reserved = get_line_reserved_map([r.so_item for r in so_items])
+	stock_map = get_stock_map(fg_items)
+
+	unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
+	displayed_reserved = (
+		get_reserved_in_stock_warehouse_map(sos)
+		if unreserved_basis == "Only Displayed SOs"
+		else {}
+	)
+	item_free = {}
+	for item in fg_items:
+		stock = stock_map.get(item) or frappe._dict()
+		if unreserved_basis == "Only Displayed SOs":
+			reserved_from_stock = displayed_reserved.get(item, 0.0) or 0.0
+		else:
+			reserved_from_stock = flt(stock.get("reserved_qty"))
+		item_free[item] = flt(stock.get("actual_qty")) - reserved_from_stock
+
+	short_by_item = {}
+	for r in so_items:
+		res = line_reserved.get(r.so_item) or frappe._dict()
+		short = max(0.0, flt(r.pending_qty) - flt(res.get("reserved_qty")))
+		short_by_item[r.item_code] = short_by_item.get(r.item_code, 0.0) + short
+
+	out = {}
+	for item, short in short_by_item.items():
+		qty = max(0.0, short - flt(item_free.get(item, 0.0)))
+		if qty > 0:
+			out[item] = qty
+	return out
+
+
+@frappe.whitelist()
+def create_production_plan_from_suggested_prodn(filters=None):
+	"""Create a DRAFT Production Plan from the report's itemwise Suggested Prodn,
+	then populate the full nested sub-assembly chain and the raw materials for
+	purchase, and save it (never auto-submitted). Recomputed server-side from
+	`filters` so it matches the report.
+
+	Integrates with the site's custom Production Plan subsystem (separate app)
+	rather than stock ERPNext routines, so the plan is created the way that app
+	expects:
+	  1. Root plan tagged custom_purpose = "Planning" (drives that app's naming
+	     series and submit cascade) with one po_items row per item = its
+	     Suggested Prodn (needs an active default BOM; others skipped + reported).
+	  2. "Display Zero Value" -> custom_display_zero_value (that app's field, and
+	     one of its SYNC_FIELDS propagated down the chain).
+	  3. Get Raw Materials for Purchase -> seed the root's mr_items via that app's
+	     trigger_get_item_for_mr. NB this uses STOCK ERPNext RM computation, not
+	     frontec's whitelisted override (a direct Python call isn't intercepted by
+	     override_whitelisted_methods) - consistent with what the chain build uses
+	     internally, and it avoids the 0-qty Manufacture rows that "Display Zero
+	     Value" would otherwise spawn and roll the whole hierarchy back on.
+	  4. "Full Nested Chain" -> that app's create_full_hierarchy, building the
+	     linked child-plan chain that MR Hierarchy Excel later flattens.
+
+	Steps 3-4 run only when FROTEC_PP_MODULE is configured. Otherwise the button
+	stops after creating a correctly-tagged DRAFT root and tells the user to click
+	the app's own "Create Full Chain" - it deliberately does NOT fall back to
+	stock get_sub_assembly_items / get_items_for_material_requests, which produce
+	a plan that app's hierarchy/Excel features don't recognise."""
+	if not frappe.has_permission("Production Plan", "create"):
+		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
+
+	filters = frappe.parse_json(filters) if filters else {}
+
+	prodn_by_item = _suggested_prodn_by_item(filters)
+	if not prodn_by_item:
+		frappe.throw(_("Nothing to produce — every item's Suggested Prodn is zero for this view."))
+
+	company = (
+		frappe.defaults.get_user_default("Company")
+		or frappe.db.get_single_value("Global Defaults", "default_company")
+	)
+	if not company:
+		frappe.throw(_("No default Company found. Please set one before creating a Production Plan."))
+
+	pp = frappe.new_doc("Production Plan")
+	pp.company = company
+	# Tag for the custom subsystem (each guarded so this stays safe on a vanilla
+	# site without those custom fields). custom_purpose satisfies that app's
+	# autoname (which branches on it); custom_display_zero_value is its real
+	# "Display Zero Value" flag, propagated to children by create_full_hierarchy.
+	if pp.meta.has_field("custom_purpose"):
+		pp.custom_purpose = FGSRM_PLAN_PURPOSE
+	if pp.meta.has_field("custom_display_zero_value"):
+		pp.custom_display_zero_value = 1
+	# for_warehouse is the plan's target warehouse - frontec's _create_children
+	# propagates it to every child, and trigger_get_item_for_mr needs it as the
+	# warehouses arg. Point it at the FG stores warehouse the report works in.
+	pp.for_warehouse = STOCK_WAREHOUSE
+
+	skipped = []
+	for item, qty in prodn_by_item.items():
+		item_detail = frappe.db.get_value("Item", item, ["stock_uom", "default_bom"], as_dict=True) or frappe._dict()
+		bom_no = item_detail.default_bom or frappe.db.get_value(
+			"BOM", {"item": item, "is_default": 1, "is_active": 1, "docstatus": 1}, "name"
+		)
+		if not bom_no:
+			skipped.append(item)
+			continue
+		pp.append(
+			"po_items",
+			{
+				"item_code": item,
+				"bom_no": bom_no,
+				"planned_qty": qty,
+				"planned_start_date": nowdate(),
+				"stock_uom": item_detail.stock_uom,
+				"warehouse": STOCK_WAREHOUSE,
+			},
+		)
+
+	if not pp.get("po_items"):
+		frappe.throw(
+			_("No Production Plan rows — none of the items with Suggested Prodn have an active default BOM.")
+		)
+
+	pp.insert()
+
+	# 3-4: hand off to the custom subsystem when configured. Each step is guarded
+	# so a signature/version difference leaves the tagged draft intact.
+	get_items = _frotec_attr(FROTEC_GET_ITEMS_FN)
+	full_chain = _frotec_attr(FROTEC_FULL_CHAIN_FN)
+	handed_off = False
+	raw_material_count = 0
+
+	if get_items and full_chain:
+		try:
+			# 3. Seed the root's Raw Materials for Purchase. trigger_get_item_for_mr
+			# takes (PP_doc, warehouses) and does NOT save itself, so save after.
+			warehouses = [{"warehouse": pp.for_warehouse}]
+			get_items(pp, warehouses)
+			pp.save(ignore_permissions=True)
+			raw_material_count = len(pp.get("mr_items") or [])
+			# 4. Build the full nested chain. Pass the DOC (create_full_hierarchy
+			# derives the name and does attribute access internally - a bare name or
+			# plain dict would break). It runs in its own savepoint: on error it
+			# rolls back the child chain, leaving the tagged root + its mr_items.
+			# Not idempotent (throws if children already exist) - fine here since we
+			# always build on a freshly-created root.
+			full_chain(pp)
+			handed_off = True
+		except Exception:
+			frappe.log_error(title="FGSRM Create Prodn Plan: hierarchy hand-off failed for {0}".format(pp.name))
+
+	if skipped:
+		frappe.msgprint(
+			_("Skipped (no active default BOM): {0}").format(", ".join(sorted(set(skipped)))),
+			indicator="orange",
+			alert=True,
+		)
+
+	return {
+		"name": pp.name,
+		"items": len(pp.get("po_items") or []),
+		"raw_materials": raw_material_count,
+		"handed_off": handed_off,
+		"skipped": skipped,
+	}

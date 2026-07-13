@@ -174,6 +174,13 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		if (f === "reservable_now") {
 			return `<div style="background-color:#e1f5ee;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
 		}
+		// Suggested Prodn: tint amber and bold when there's a real shortfall to make.
+		if (f === "suggested_prodn") {
+			if (data && flt(data.suggested_prodn) > 0) {
+				return `<div style="background-color:#fff3e0;margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
+			}
+			return formatted;
+		}
 		if (f === "reserve_qty") {
 			return `<span style="font-weight:600;">${formatted}</span>`;
 		}
@@ -292,6 +299,49 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 										indicator: "green",
 									});
 									frappe.set_route("Form", "Weekly Planning Snapshot", r.message);
+								}
+							},
+						});
+					}
+				);
+			},
+			__("Reports")
+		);
+
+		// ── Create a draft Production Plan from the itemwise Suggested Prodn ──
+		report.page.add_inner_button(
+			__("Create Prodn Plan"),
+			() => {
+				frappe.confirm(
+					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will also pull the full nested sub-assembly chain and the raw materials for purchase, then save as a draft for you to review."),
+					() => {
+						frappe.call({
+							method: `${FGSRM_METHOD_PATH}.create_production_plan_from_suggested_prodn`,
+							args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
+							freeze: true,
+							freeze_message: __("Creating Production Plan…"),
+							callback(r) {
+								const m = r.message;
+								if (m && m.name) {
+									if (m.handed_off) {
+										frappe.show_alert({
+											message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built.", [
+												m.name,
+												m.items,
+												m.raw_materials,
+											]),
+											indicator: "green",
+										});
+									} else {
+										frappe.show_alert({
+											message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain” to build the nested plans.", [
+												m.name,
+												m.items,
+											]),
+											indicator: "blue",
+										});
+									}
+									frappe.set_route("Form", "Production Plan", m.name);
 								}
 							},
 						});

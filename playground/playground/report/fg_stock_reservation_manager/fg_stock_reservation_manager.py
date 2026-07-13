@@ -51,7 +51,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate
+from frappe.utils import cint, flt, getdate, nowdate
 from datetime import date
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
@@ -522,3 +522,174 @@ def cancel_reservations(sre_names):
 		cancelled += 1
 
 	return {"cancelled": cancelled}
+
+
+# --------------------------------------------------------------------------- #
+# Create Production Plan (from Suggested Prodn)
+# --------------------------------------------------------------------------- #
+
+def _suggested_prodn_by_item(filters):
+	"""Itemwise Suggested Prodn for the current filters = max(0, Σ Short to
+	Complete − Item Free Stock), computed once per item.
+
+	NB: this aggregates at the ITEM level rather than naively summing the
+	per-line "Suggested Prodn" column - free stock is shared across an item's SO
+	lines, so summing the per-line figure (which subtracts the full free stock on
+	every line) would misstate the true net requirement. Same demand/free-stock
+	inputs and Unreserved Stock Basis as the report, so the totals reconcile with
+	what's on screen. Only the item/customer/date filters apply here (the
+	only_unreserved / view_mode display toggles don't change true open demand).
+
+	Returns {item_code: qty} for items with a positive requirement."""
+	so_items = get_open_so_items(filters)
+	if not so_items:
+		return {}
+
+	fg_items = sorted(set(r.item_code for r in so_items))
+	sos = sorted(set(r.sales_order for r in so_items))
+	line_reserved = get_line_reserved_map([r.so_item for r in so_items])
+	stock_map = get_stock_map(fg_items)
+
+	unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
+	displayed_reserved = (
+		get_reserved_in_stock_warehouse_map(sos)
+		if unreserved_basis == "Only Displayed SOs"
+		else {}
+	)
+	item_free = {}
+	for item in fg_items:
+		stock = stock_map.get(item) or frappe._dict()
+		if unreserved_basis == "Only Displayed SOs":
+			reserved_from_stock = displayed_reserved.get(item, 0.0) or 0.0
+		else:
+			reserved_from_stock = flt(stock.get("reserved_qty"))
+		item_free[item] = flt(stock.get("actual_qty")) - reserved_from_stock
+
+	short_by_item = {}
+	for r in so_items:
+		res = line_reserved.get(r.so_item) or frappe._dict()
+		short = max(0.0, flt(r.pending_qty) - flt(res.get("reserved_qty")))
+		short_by_item[r.item_code] = short_by_item.get(r.item_code, 0.0) + short
+
+	out = {}
+	for item, short in short_by_item.items():
+		qty = max(0.0, short - flt(item_free.get(item, 0.0)))
+		if qty > 0:
+			out[item] = qty
+	return out
+
+
+@frappe.whitelist()
+def create_production_plan_from_suggested_prodn(filters=None):
+	"""Create a DRAFT Production Plan from the report's itemwise Suggested Prodn,
+	then populate the full nested sub-assembly chain and the raw materials for
+	purchase, and save it (never auto-submitted). Recomputed server-side from
+	`filters` so it matches the report.
+
+	Steps mirror the manual Production Plan workflow:
+	  1. One po_items row per item = its Suggested Prodn (needs an active default
+	     BOM; items without one are skipped and reported).
+	  2. "Display Zero Value" -> ignore_existing_ordered_qty, so the raw-material
+	     planning surfaces every required line rather than netting some to zero.
+	  3. Get Sub Assembly Items -> "Full Nested Chain" (BOM exploded through all
+	     sub-assembly levels).
+	  4. Get Raw Materials for Purchase -> Material Request Plan Items.
+
+	Steps 3 & 4 call ERPNext's own Production Plan routines so behaviour matches
+	the buttons on the form; each is wrapped defensively so a signature/version
+	difference logs and degrades rather than aborting the whole action. The exact
+	field/method mapping for "Display Zero Value" and "Full Nested Chain" is
+	ERPNext-version dependent - verify against the form on your site."""
+	if not frappe.has_permission("Production Plan", "create"):
+		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
+
+	filters = frappe.parse_json(filters) if filters else {}
+
+	prodn_by_item = _suggested_prodn_by_item(filters)
+	if not prodn_by_item:
+		frappe.throw(_("Nothing to produce — every item's Suggested Prodn is zero for this view."))
+
+	company = (
+		frappe.defaults.get_user_default("Company")
+		or frappe.db.get_single_value("Global Defaults", "default_company")
+	)
+	if not company:
+		frappe.throw(_("No default Company found. Please set one before creating a Production Plan."))
+
+	pp = frappe.new_doc("Production Plan")
+	pp.company = company
+	# "Display Zero Value": show every required raw material, including lines an
+	# existing projected/ordered qty would otherwise net to zero.
+	if pp.meta.has_field("ignore_existing_ordered_qty"):
+		pp.ignore_existing_ordered_qty = 1
+
+	skipped = []
+	for item, qty in prodn_by_item.items():
+		item_detail = frappe.db.get_value("Item", item, ["stock_uom", "default_bom"], as_dict=True) or frappe._dict()
+		bom_no = item_detail.default_bom or frappe.db.get_value(
+			"BOM", {"item": item, "is_default": 1, "is_active": 1, "docstatus": 1}, "name"
+		)
+		if not bom_no:
+			skipped.append(item)
+			continue
+		pp.append(
+			"po_items",
+			{
+				"item_code": item,
+				"bom_no": bom_no,
+				"planned_qty": qty,
+				"planned_start_date": nowdate(),
+				"stock_uom": item_detail.stock_uom,
+				"warehouse": STOCK_WAREHOUSE,
+			},
+		)
+
+	if not pp.get("po_items"):
+		frappe.throw(
+			_("No Production Plan rows — none of the items with Suggested Prodn have an active default BOM.")
+		)
+
+	pp.insert()
+
+	# 3. Full Nested Chain: explode every po_item's BOM through all sub-assembly
+	# levels, then persist. Guarded + saved on its own so a failure here (or in
+	# step 4) still leaves a usable draft rather than aborting the whole action.
+	sub_assembly_count = 0
+	try:
+		pp.get_sub_assembly_items()
+		pp.save()
+		sub_assembly_count = len(pp.get("sub_assembly_items") or [])
+	except Exception:
+		frappe.log_error(title="FGSRM Create Prodn Plan: get_sub_assembly_items failed for {0}".format(pp.name))
+		pp.reload()
+
+	# 4. Get Raw Materials for Purchase -> Material Request Plan Items.
+	raw_material_count = 0
+	try:
+		from erpnext.manufacturing.doctype.production_plan.production_plan import (
+			get_items_for_material_requests,
+		)
+
+		mr_items = get_items_for_material_requests(pp.as_dict()) or []
+		for d in mr_items:
+			pp.append("mr_items", d)
+		pp.save()
+		raw_material_count = len(pp.get("mr_items") or [])
+	except Exception:
+		frappe.log_error(title="FGSRM Create Prodn Plan: get_items_for_material_requests failed for {0}".format(pp.name))
+		pp.reload()
+
+	if skipped:
+		frappe.msgprint(
+			_("Skipped (no active default BOM): {0}").format(", ".join(sorted(set(skipped)))),
+			indicator="orange",
+			alert=True,
+		)
+
+	return {
+		"name": pp.name,
+		"items": len(pp.get("po_items") or []),
+		"sub_assemblies": sub_assembly_count,
+		"raw_materials": raw_material_count,
+		"skipped": skipped,
+	}

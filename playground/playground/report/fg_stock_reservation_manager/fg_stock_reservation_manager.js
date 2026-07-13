@@ -308,6 +308,40 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			__("Reports")
 		);
 
+		// ── Create a draft Production Plan from the itemwise Suggested Prodn ──
+		report.page.add_inner_button(
+			__("Create Prodn Plan"),
+			() => {
+				frappe.confirm(
+					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will also pull the full nested sub-assembly chain and the raw materials for purchase, then save as a draft for you to review."),
+					() => {
+						frappe.call({
+							method: `${FGSRM_METHOD_PATH}.create_production_plan_from_suggested_prodn`,
+							args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
+							freeze: true,
+							freeze_message: __("Creating Production Plan…"),
+							callback(r) {
+								const m = r.message;
+								if (m && m.name) {
+									frappe.show_alert({
+										message: __("Production Plan {0}: {1} item(s), {2} sub-assembly line(s), {3} raw material line(s).", [
+											m.name,
+											m.items,
+											m.sub_assemblies,
+											m.raw_materials,
+										]),
+										indicator: "green",
+									});
+									frappe.set_route("Form", "Production Plan", m.name);
+								}
+							},
+						});
+					}
+				);
+			},
+			__("Reports")
+		);
+
 		// ── Views: narrow to SOs where every line meets a condition ─────────
 		report.page.add_inner_button(
 			__("Ready to Dispatch"),

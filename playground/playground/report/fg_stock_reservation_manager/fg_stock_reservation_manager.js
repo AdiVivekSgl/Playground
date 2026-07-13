@@ -4,18 +4,20 @@
 const FGSRM_METHOD_PATH =
 	"playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager";
 
-// frontec's whitelisted GET endpoint that streams the MR Hierarchy workbook for
-// a Production Plan (walks the whole nested chain). Kept in sync with
-// FROTEC_PP_MODULE server-side.
-const FROTEC_MR_EXCEL_METHOD =
-	"frontec.doc_event.production_plan.hierarchy_excel.download_mr_hierarchy_excel";
+// Playground's own 3-sheet workbook (FGSRM view / FG Requirement / RM Component
+// Shortage) for a created Production Plan. Separate from frontec's MR Hierarchy
+// Excel, which is left untouched and still available from the plan form.
+const FGSRM_MR_EXCEL_METHOD =
+	"playground.playground.production_plan_mr_excel.download_fgsrm_mr_excel";
 
 // Trigger a file download without navigating away. An <a> click (rather than
 // window.open) avoids the pop-up blocker that can swallow a window.open fired
 // from an async callback; the attachment Content-Disposition means the browser
-// downloads instead of opening a tab.
-function fgsrm_download_mr_hierarchy_excel(pp_name) {
-	const url = `/api/method/${FROTEC_MR_EXCEL_METHOD}?name=${encodeURIComponent(pp_name)}`;
+// downloads instead of opening a tab. Passes the current FGSRM filters so the
+// workbook's "FGSRM" sheet reflects the same view that produced the plan.
+function fgsrm_download_mr_excel(pp_name, filters_json) {
+	let url = `/api/method/${FGSRM_MR_EXCEL_METHOD}?name=${encodeURIComponent(pp_name)}`;
+	if (filters_json) url += `&filters=${encodeURIComponent(filters_json)}`;
 	const a = document.createElement("a");
 	a.href = url;
 	a.target = "_blank";
@@ -351,7 +353,7 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			__("Create Prodn Plan"),
 			() => {
 				frappe.confirm(
-					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the MR Hierarchy Excel — no need to open the plan."),
+					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the Production Plan workbook — no need to open the plan."),
 					() => {
 						frappe.call({
 							method: `${FGSRM_METHOD_PATH}.create_production_plan_from_suggested_prodn`,
@@ -366,20 +368,20 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 									// MR Hierarchy workbook is meaningful — download it
 									// straight away and stay on the report.
 									frappe.show_alert({
-										message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading MR Hierarchy Excel…", [
+										message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading Production Plan workbook…", [
 											m.name,
 											m.items,
 											m.raw_materials,
 										]),
 										indicator: "green",
 									});
-									fgsrm_download_mr_hierarchy_excel(m.name);
+									fgsrm_download_mr_excel(m.name, JSON.stringify(frappe.query_report.get_filter_values()));
 								} else {
 									// Chain didn't build (frontec hand-off unavailable
 									// or errored) — the workbook would be incomplete, so
 									// send the user to the draft to finish it manually.
 									frappe.show_alert({
-										message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the MR Hierarchy Excel.", [
+										message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the Production Plan workbook.", [
 											m.name,
 											m.items,
 										]),

@@ -80,7 +80,7 @@ from playground.playground.report.production_requirement_report.production_requi
 # button still creates a correctly-tagged root DRAFT and asks the user to click
 # the app's own "Create Full Chain" button - never falling back to the stock
 # mechanisms, which don't integrate with that app.
-FROTEC_PP_MODULE = None  # e.g. "frontec.doc_event.production_plan.production_plan"
+FROTEC_PP_MODULE = "frontec.doc_event.production_plan.production_plan"
 FROTEC_GET_ITEMS_FN = "trigger_get_item_for_mr"   # seeds the root's mr_items
 FROTEC_FULL_CHAIN_FN = "create_full_hierarchy"    # builds the nested plan chain
 # custom_purpose for the FGSRM-created root plan (decided with the user).
@@ -626,7 +626,11 @@ def create_production_plan_from_suggested_prodn(filters=None):
 	  2. "Display Zero Value" -> custom_display_zero_value (that app's field, and
 	     one of its SYNC_FIELDS propagated down the chain).
 	  3. Get Raw Materials for Purchase -> seed the root's mr_items via that app's
-	     overridden trigger (so the zero-Planned-Qty guard applies).
+	     trigger_get_item_for_mr. NB this uses STOCK ERPNext RM computation, not
+	     frontec's whitelisted override (a direct Python call isn't intercepted by
+	     override_whitelisted_methods) - consistent with what the chain build uses
+	     internally, and it avoids the 0-qty Manufacture rows that "Display Zero
+	     Value" would otherwise spawn and roll the whole hierarchy back on.
 	  4. "Full Nested Chain" -> that app's create_full_hierarchy, building the
 	     linked child-plan chain that MR Hierarchy Excel later flattens.
 
@@ -661,6 +665,10 @@ def create_production_plan_from_suggested_prodn(filters=None):
 		pp.custom_purpose = FGSRM_PLAN_PURPOSE
 	if pp.meta.has_field("custom_display_zero_value"):
 		pp.custom_display_zero_value = 1
+	# for_warehouse is the plan's target warehouse - frontec's _create_children
+	# propagates it to every child, and trigger_get_item_for_mr needs it as the
+	# warehouses arg. Point it at the FG stores warehouse the report works in.
+	pp.for_warehouse = STOCK_WAREHOUSE
 
 	skipped = []
 	for item, qty in prodn_by_item.items():
@@ -699,12 +707,19 @@ def create_production_plan_from_suggested_prodn(filters=None):
 
 	if get_items and full_chain:
 		try:
-			# 3. Seed the root's Raw Materials for Purchase (that app's override).
-			get_items(pp)
-			pp.reload()
+			# 3. Seed the root's Raw Materials for Purchase. trigger_get_item_for_mr
+			# takes (PP_doc, warehouses) and does NOT save itself, so save after.
+			warehouses = [{"warehouse": pp.for_warehouse}]
+			get_items(pp, warehouses)
+			pp.save(ignore_permissions=True)
 			raw_material_count = len(pp.get("mr_items") or [])
-			# 4. Build the full nested chain of child plans.
-			full_chain(pp.name)
+			# 4. Build the full nested chain. Pass the DOC (create_full_hierarchy
+			# derives the name and does attribute access internally - a bare name or
+			# plain dict would break). It runs in its own savepoint: on error it
+			# rolls back the child chain, leaving the tagged root + its mr_items.
+			# Not idempotent (throws if children already exist) - fine here since we
+			# always build on a freshly-created root.
+			full_chain(pp)
 			handed_off = True
 		except Exception:
 			frappe.log_error(title="FGSRM Create Prodn Plan: hierarchy hand-off failed for {0}".format(pp.name))

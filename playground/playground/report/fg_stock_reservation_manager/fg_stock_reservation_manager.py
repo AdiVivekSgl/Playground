@@ -66,6 +66,37 @@ from playground.playground.report.production_requirement_report.production_requi
 	_resolve_date_field,
 )
 
+# --------------------------------------------------------------------------- #
+# Integration with the site's custom Production Plan subsystem (separate app).
+#
+# "Create Prodn Plan" hands the plan off to that app's nested-hierarchy feature
+# instead of stock ERPNext routines, so the plan is created the way that app
+# expects: custom_purpose drives naming/submit, custom_display_zero_value is the
+# real "Display Zero Value" field, and create_full_hierarchy builds the linked
+# child-plan chain that MR Hierarchy Excel later flattens.
+#
+# Set FROTEC_PP_MODULE to that app's Production Plan module (dotted path) to
+# enable the automatic Get-Raw-Materials + full-chain build. Left None, the
+# button still creates a correctly-tagged root DRAFT and asks the user to click
+# the app's own "Create Full Chain" button - never falling back to the stock
+# mechanisms, which don't integrate with that app.
+FROTEC_PP_MODULE = None  # e.g. "frontec.doc_event.production_plan.production_plan"
+FROTEC_GET_ITEMS_FN = "trigger_get_item_for_mr"   # seeds the root's mr_items
+FROTEC_FULL_CHAIN_FN = "create_full_hierarchy"    # builds the nested plan chain
+# custom_purpose for the FGSRM-created root plan (decided with the user).
+FGSRM_PLAN_PURPOSE = "Planning"
+
+
+def _frotec_attr(name):
+	"""Resolve a callable in the custom Production Plan app, or None if that app
+	/ path isn't configured or present on this site."""
+	if not FROTEC_PP_MODULE:
+		return None
+	try:
+		return frappe.get_attr("{0}.{1}".format(FROTEC_PP_MODULE, name))
+	except Exception:
+		return None
+
 
 def execute(filters=None):
 	filters = filters or {}
@@ -586,20 +617,24 @@ def create_production_plan_from_suggested_prodn(filters=None):
 	purchase, and save it (never auto-submitted). Recomputed server-side from
 	`filters` so it matches the report.
 
-	Steps mirror the manual Production Plan workflow:
-	  1. One po_items row per item = its Suggested Prodn (needs an active default
-	     BOM; items without one are skipped and reported).
-	  2. "Display Zero Value" -> ignore_existing_ordered_qty, so the raw-material
-	     planning surfaces every required line rather than netting some to zero.
-	  3. Get Sub Assembly Items -> "Full Nested Chain" (BOM exploded through all
-	     sub-assembly levels).
-	  4. Get Raw Materials for Purchase -> Material Request Plan Items.
+	Integrates with the site's custom Production Plan subsystem (separate app)
+	rather than stock ERPNext routines, so the plan is created the way that app
+	expects:
+	  1. Root plan tagged custom_purpose = "Planning" (drives that app's naming
+	     series and submit cascade) with one po_items row per item = its
+	     Suggested Prodn (needs an active default BOM; others skipped + reported).
+	  2. "Display Zero Value" -> custom_display_zero_value (that app's field, and
+	     one of its SYNC_FIELDS propagated down the chain).
+	  3. Get Raw Materials for Purchase -> seed the root's mr_items via that app's
+	     overridden trigger (so the zero-Planned-Qty guard applies).
+	  4. "Full Nested Chain" -> that app's create_full_hierarchy, building the
+	     linked child-plan chain that MR Hierarchy Excel later flattens.
 
-	Steps 3 & 4 call ERPNext's own Production Plan routines so behaviour matches
-	the buttons on the form; each is wrapped defensively so a signature/version
-	difference logs and degrades rather than aborting the whole action. The exact
-	field/method mapping for "Display Zero Value" and "Full Nested Chain" is
-	ERPNext-version dependent - verify against the form on your site."""
+	Steps 3-4 run only when FROTEC_PP_MODULE is configured. Otherwise the button
+	stops after creating a correctly-tagged DRAFT root and tells the user to click
+	the app's own "Create Full Chain" - it deliberately does NOT fall back to
+	stock get_sub_assembly_items / get_items_for_material_requests, which produce
+	a plan that app's hierarchy/Excel features don't recognise."""
 	if not frappe.has_permission("Production Plan", "create"):
 		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
 
@@ -618,10 +653,14 @@ def create_production_plan_from_suggested_prodn(filters=None):
 
 	pp = frappe.new_doc("Production Plan")
 	pp.company = company
-	# "Display Zero Value": show every required raw material, including lines an
-	# existing projected/ordered qty would otherwise net to zero.
-	if pp.meta.has_field("ignore_existing_ordered_qty"):
-		pp.ignore_existing_ordered_qty = 1
+	# Tag for the custom subsystem (each guarded so this stays safe on a vanilla
+	# site without those custom fields). custom_purpose satisfies that app's
+	# autoname (which branches on it); custom_display_zero_value is its real
+	# "Display Zero Value" flag, propagated to children by create_full_hierarchy.
+	if pp.meta.has_field("custom_purpose"):
+		pp.custom_purpose = FGSRM_PLAN_PURPOSE
+	if pp.meta.has_field("custom_display_zero_value"):
+		pp.custom_display_zero_value = 1
 
 	skipped = []
 	for item, qty in prodn_by_item.items():
@@ -651,33 +690,24 @@ def create_production_plan_from_suggested_prodn(filters=None):
 
 	pp.insert()
 
-	# 3. Full Nested Chain: explode every po_item's BOM through all sub-assembly
-	# levels, then persist. Guarded + saved on its own so a failure here (or in
-	# step 4) still leaves a usable draft rather than aborting the whole action.
-	sub_assembly_count = 0
-	try:
-		pp.get_sub_assembly_items()
-		pp.save()
-		sub_assembly_count = len(pp.get("sub_assembly_items") or [])
-	except Exception:
-		frappe.log_error(title="FGSRM Create Prodn Plan: get_sub_assembly_items failed for {0}".format(pp.name))
-		pp.reload()
-
-	# 4. Get Raw Materials for Purchase -> Material Request Plan Items.
+	# 3-4: hand off to the custom subsystem when configured. Each step is guarded
+	# so a signature/version difference leaves the tagged draft intact.
+	get_items = _frotec_attr(FROTEC_GET_ITEMS_FN)
+	full_chain = _frotec_attr(FROTEC_FULL_CHAIN_FN)
+	handed_off = False
 	raw_material_count = 0
-	try:
-		from erpnext.manufacturing.doctype.production_plan.production_plan import (
-			get_items_for_material_requests,
-		)
 
-		mr_items = get_items_for_material_requests(pp.as_dict()) or []
-		for d in mr_items:
-			pp.append("mr_items", d)
-		pp.save()
-		raw_material_count = len(pp.get("mr_items") or [])
-	except Exception:
-		frappe.log_error(title="FGSRM Create Prodn Plan: get_items_for_material_requests failed for {0}".format(pp.name))
-		pp.reload()
+	if get_items and full_chain:
+		try:
+			# 3. Seed the root's Raw Materials for Purchase (that app's override).
+			get_items(pp)
+			pp.reload()
+			raw_material_count = len(pp.get("mr_items") or [])
+			# 4. Build the full nested chain of child plans.
+			full_chain(pp.name)
+			handed_off = True
+		except Exception:
+			frappe.log_error(title="FGSRM Create Prodn Plan: hierarchy hand-off failed for {0}".format(pp.name))
 
 	if skipped:
 		frappe.msgprint(
@@ -689,7 +719,7 @@ def create_production_plan_from_suggested_prodn(filters=None):
 	return {
 		"name": pp.name,
 		"items": len(pp.get("po_items") or []),
-		"sub_assemblies": sub_assembly_count,
 		"raw_materials": raw_material_count,
+		"handed_off": handed_off,
 		"skipped": skipped,
 	}

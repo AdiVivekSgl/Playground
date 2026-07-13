@@ -323,15 +323,24 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 							callback(r) {
 								const m = r.message;
 								if (m && m.name) {
-									frappe.show_alert({
-										message: __("Production Plan {0}: {1} item(s), {2} sub-assembly line(s), {3} raw material line(s).", [
-											m.name,
-											m.items,
-											m.sub_assemblies,
-											m.raw_materials,
-										]),
-										indicator: "green",
-									});
+									if (m.handed_off) {
+										frappe.show_alert({
+											message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built.", [
+												m.name,
+												m.items,
+												m.raw_materials,
+											]),
+											indicator: "green",
+										});
+									} else {
+										frappe.show_alert({
+											message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain” to build the nested plans.", [
+												m.name,
+												m.items,
+											]),
+											indicator: "blue",
+										});
+									}
 									frappe.set_route("Form", "Production Plan", m.name);
 								}
 							},

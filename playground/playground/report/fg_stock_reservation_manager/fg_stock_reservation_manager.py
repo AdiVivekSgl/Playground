@@ -121,6 +121,18 @@ def execute(filters=None):
 	# "Date" column shows the SO date chosen by the Date Basis dropdown.
 	so_date_map = _get_so_date_map(sos, filters.get("date_basis"))
 
+	# Computed Material Status per SO (custom_material_status - the stored field
+	# from the Sales Order Material Status feature). Guarded so this still runs on
+	# a site where that field hasn't been installed.
+	so_material_status = {}
+	if sos and frappe.db.has_column("Sales Order", "custom_material_status"):
+		so_material_status = {
+			r.name: r.custom_material_status
+			for r in frappe.get_all(
+				"Sales Order", filters={"name": ["in", sos]}, fields=["name", "custom_material_status"]
+			)
+		}
+
 	# Item free stock is shared across an item's SO lines; deduct as we walk the
 	# lines (FIFO by delivery date) so "Reservable Qty" doesn't over-promise the
 	# same units to two lines.
@@ -194,6 +206,7 @@ def execute(filters=None):
 			{
 				"item_code": r.item_code,
 				"item_name": details.get("item_name"),
+				"material_status": so_material_status.get(r.sales_order),
 				"customer": r.customer,
 				"sales_order": r.sales_order,
 				"so_date": so_date_map.get(r.sales_order),
@@ -270,6 +283,7 @@ def _collapse_by_so(rows):
 		if agg is None:
 			agg = {
 				"sales_order": so,
+				"material_status": r.get("material_status"),
 				"customer": r.get("customer"),
 				"so_date": r.get("so_date"),
 				"pending_qty": 0.0,
@@ -290,6 +304,7 @@ def _collapse_by_so(rows):
 def get_columns():
 	return [
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
+		{"label": _("Material Status"), "fieldname": "material_status", "fieldtype": "Data", "width": 140},
 		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link", "options": "Customer", "width": 160},
 		{"label": _("SO"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 130},
 		# Editable only when Date Basis = "Custom Updated Delivery Date" (see the

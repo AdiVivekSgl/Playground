@@ -121,6 +121,18 @@ def execute(filters=None):
 	# "Date" column shows the SO date chosen by the Date Basis dropdown.
 	so_date_map = _get_so_date_map(sos, filters.get("date_basis"))
 
+	# Computed Material Status per SO (custom_material_status - the stored field
+	# from the Sales Order Material Status feature). Guarded so this still runs on
+	# a site where that field hasn't been installed.
+	so_material_status = {}
+	if sos and frappe.db.has_column("Sales Order", "custom_material_status"):
+		so_material_status = {
+			r.name: r.custom_material_status
+			for r in frappe.get_all(
+				"Sales Order", filters={"name": ["in", sos]}, fields=["name", "custom_material_status"]
+			)
+		}
+
 	# Item free stock is shared across an item's SO lines; deduct as we walk the
 	# lines (FIFO by delivery date) so "Reservable Qty" doesn't over-promise the
 	# same units to two lines.
@@ -194,6 +206,7 @@ def execute(filters=None):
 			{
 				"item_code": r.item_code,
 				"item_name": details.get("item_name"),
+				"material_status": so_material_status.get(r.sales_order),
 				"customer": r.customer,
 				"sales_order": r.sales_order,
 				"so_date": so_date_map.get(r.sales_order),
@@ -223,8 +236,10 @@ def execute(filters=None):
 		row["so_group_first"] = row["sales_order"] != last_so
 		last_so = row["sales_order"]
 
+	group_by_so = cint(filters.get("group_by_so"))
+
 	if not view_mode:
-		return get_columns(), data
+		return get_columns(), _collapse_by_so(data) if group_by_so else data
 
 	# Evaluate per-SO qualification across ALL of that SO's lines (only_unreserved
 	# was forced off above, so `data` already holds every line for each SO here).
@@ -247,12 +262,49 @@ def execute(filters=None):
 		qualifying_sos = {
 			so for so, flags in so_ok.items() if flags["coverable"] and not flags["ready"]
 		}
-	return get_columns(), [row for row in data if row["sales_order"] in qualifying_sos]
+	filtered = [row for row in data if row["sales_order"] in qualifying_sos]
+	return get_columns(), _collapse_by_so(filtered) if group_by_so else filtered
+
+
+def _collapse_by_so(rows):
+	"""Collapse per-line rows to one summary row per Sales Order for the "Group by
+	Sales Order" toggle: Pending Qty, Reserved Qty and Suggested Prodn are summed
+	across the SO's item lines; the SO-level identity fields (SO, Customer,
+	Dispatch Priority Date) carry through; every item-level column is left blank.
+	SO order is preserved from the incoming (already date-sorted) rows.
+
+	This is a read-only summary - a collapsed row has no sales_order_item, so the
+	per-line Create/Cancel/Reserve actions no-op on it (by design)."""
+	out = []
+	index = {}
+	for r in rows:
+		so = r.get("sales_order")
+		agg = index.get(so)
+		if agg is None:
+			agg = {
+				"sales_order": so,
+				"material_status": r.get("material_status"),
+				"customer": r.get("customer"),
+				"so_date": r.get("so_date"),
+				"pending_qty": 0.0,
+				"reserved_qty": 0.0,
+				"suggested_prodn": 0.0,
+				# Each collapsed row is its own group, so the client formatter's
+				# repeat-blanking never fires and the group border shows per SO.
+				"so_group_first": True,
+			}
+			index[so] = agg
+			out.append(agg)
+		agg["pending_qty"] += flt(r.get("pending_qty"))
+		agg["reserved_qty"] += flt(r.get("reserved_qty"))
+		agg["suggested_prodn"] += flt(r.get("suggested_prodn"))
+	return out
 
 
 def get_columns():
 	return [
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
+		{"label": _("Material Status"), "fieldname": "material_status", "fieldtype": "Data", "width": 140},
 		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link", "options": "Customer", "width": 160},
 		{"label": _("SO"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 130},
 		# Editable only when Date Basis = "Custom Updated Delivery Date" (see the

@@ -67,5 +67,61 @@
   "allow_on_submit": 1,
   "translatable": 0,
   "description": "Counts how many times custom_updated_delivery_date changed via a standard Sales Order form/controller save. Intentionally does NOT count FGSRM's Dispatch Priority Date edits (those use db.set_value and bypass validate). >4 drives \"Needs Attention\" (rank 4)."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Journal Entry-custom_linked_sales_invoice",
+  "dt": "Journal Entry",
+  "fieldname": "custom_linked_sales_invoice",
+  "label": "Linked Sales Invoice",
+  "fieldtype": "Link",
+  "options": "Sales Invoice",
+  "insert_after": "user_remark",
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Optional link to the Sales Invoice this (non-COGS) expense is attributed to, so expenses can be tagged against a specific customer / invoice for reporting."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Journal Entry-custom_expense_customer",
+  "dt": "Journal Entry",
+  "fieldname": "custom_expense_customer",
+  "label": "Expense Customer",
+  "fieldtype": "Link",
+  "options": "Customer",
+  "insert_after": "custom_linked_sales_invoice",
+  "fetch_from": "custom_linked_sales_invoice.customer",
+  "read_only": 1,
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Customer this expense is attributed to. Auto-fetched (read-only) from the Linked Sales Invoice; lets non-COGS expenses be grouped by customer without a separate manual entry."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Purchase Invoice-custom_linked_sales_invoice",
+  "dt": "Purchase Invoice",
+  "fieldname": "custom_linked_sales_invoice",
+  "label": "Linked Sales Invoice",
+  "fieldtype": "Link",
+  "options": "Sales Invoice",
+  "insert_after": "remarks",
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Optional link to the Sales Invoice this (non-COGS) expense is attributed to, so expenses can be tagged against a specific customer / invoice for reporting."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Purchase Invoice-custom_expense_customer",
+  "dt": "Purchase Invoice",
+  "fieldname": "custom_expense_customer",
+  "label": "Expense Customer",
+  "fieldtype": "Link",
+  "options": "Customer",
+  "insert_after": "custom_linked_sales_invoice",
+  "fetch_from": "custom_linked_sales_invoice.customer",
+  "read_only": 1,
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Customer this expense is attributed to. Auto-fetched (read-only) from the Linked Sales Invoice; lets non-COGS expenses be grouped by customer without a separate manual entry."
  }
 ]

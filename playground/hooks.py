@@ -38,6 +38,16 @@ fixtures = [
 			],
 		],
 	},
+	# Non-COGS expense attribution: link a Journal Entry / Purchase Invoice to a
+	# Sales Invoice (+ auto-fetched Customer) so expenses can be tagged against a
+	# specific customer / invoice.
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			["dt", "in", ["Journal Entry", "Purchase Invoice"]],
+			["fieldname", "in", ["custom_linked_sales_invoice", "custom_expense_customer"]],
+		],
+	},
 ]
 
 # First doc_events / scheduler_events in this app - drives Sales Order Material

@@ -206,6 +206,22 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		if (f === "reserve_qty") {
 			return `<span style="font-weight:600;">${formatted}</span>`;
 		}
+		// Colour-code Material Status so the six states are scannable at a glance.
+		if (f === "material_status") {
+			const colors = {
+				"Ready to Dispatch": "#e1f5ee", // green — good to go
+				Inspected: "#e8f5e9", // light green — cleared inspection
+				"Possible to Push": "#fff3e0", // amber — actionable
+				"Needs Attention": "#fde2e7", // red — problem
+				Reprioritize: "#ede7f6", // purple — far-out, revisit
+				"Planning Pending": "#eceff1", // grey — awaiting planning
+			};
+			const bg = colors[value];
+			if (bg) {
+				return `<div style="background-color:${bg};margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
+			}
+			return formatted;
+		}
 		return formatted;
 	},
 

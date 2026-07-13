@@ -174,6 +174,13 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		if (f === "reservable_now") {
 			return `<div style="background-color:#e1f5ee;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
 		}
+		// Suggested Prodn: tint amber and bold when there's a real shortfall to make.
+		if (f === "suggested_prodn") {
+			if (data && flt(data.suggested_prodn) > 0) {
+				return `<div style="background-color:#fff3e0;margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
+			}
+			return formatted;
+		}
 		if (f === "reserve_qty") {
 			return `<span style="font-weight:600;">${formatted}</span>`;
 		}

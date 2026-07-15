@@ -123,5 +123,18 @@
   "allow_on_submit": 1,
   "translatable": 0,
   "description": "Customer this expense is attributed to. Auto-fetched (read-only) from the Linked Sales Invoice; lets non-COGS expenses be grouped by customer without a separate manual entry."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Purchase Order-custom_closing_reason",
+  "dt": "Purchase Order",
+  "fieldname": "custom_closing_reason",
+  "label": "Closing Reason",
+  "fieldtype": "Small Text",
+  "insert_after": "status",
+  "read_only": 1,
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Reason captured when the Purchase Order was closed via the list-view bulk \"Close Purchase Orders\" action. Read-only audit trail; blank if closed by other means or without a reason."
  }
 ]

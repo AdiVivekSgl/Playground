@@ -13,6 +13,12 @@ doctype_js = {
 	"Work Order": "public/js/work_order.js",
 }
 
+# List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk
+# action (see playground/public/js/purchase_order_list.js).
+doctype_list_js = {
+	"Purchase Order": "public/js/purchase_order_list.js",
+}
+
 fixtures = [
 	{
 		"doctype": "Custom Field",
@@ -46,6 +52,14 @@ fixtures = [
 		"filters": [
 			["dt", "in", ["Journal Entry", "Purchase Invoice"]],
 			["fieldname", "in", ["custom_linked_sales_invoice", "custom_expense_customer"]],
+		],
+	},
+	# Audit trail for the Purchase Order bulk-close action.
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			["dt", "=", "Purchase Order"],
+			["fieldname", "=", "custom_closing_reason"],
 		],
 	},
 ]

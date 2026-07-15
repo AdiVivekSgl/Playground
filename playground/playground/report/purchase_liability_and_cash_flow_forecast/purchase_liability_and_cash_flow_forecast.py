@@ -275,6 +275,7 @@ def _get_future_rows(filters):
 		return []
 
 	supplier_terms = _supplier_terms_map({r.supplier for r in items})
+	today = getdate(nowdate())
 
 	rows = []
 	for r in items:
@@ -286,7 +287,16 @@ def _get_future_rows(filters):
 		tax_mult = _tax_mult(r.base_grand_total, r.base_net_total)
 		future = future_net * tax_mult
 		gross = flt(r.base_amount) * tax_mult
-		base_date = r.schedule_date or r.po_schedule_date or r.transaction_date
+
+		# Expected delivery per the PO (item row, else header). Shown as-is in the
+		# Expected Delivery Date column.
+		expected_delivery = r.schedule_date or r.po_schedule_date
+		# For the payment FORECAST only, never assume goods arrive in the past: use
+		# the greater of today or the expected delivery date as the base date.
+		edd = expected_delivery or r.transaction_date
+		base_date = max(today, getdate(edd)) if edd else today
+		clamped = edd and getdate(edd) < today
+
 		template = r.payment_terms_template or supplier_terms.get(r.supplier)
 		for portion, credit_days, term in _terms_milestones(template):
 			amt = future * portion
@@ -296,11 +306,15 @@ def _get_future_rows(filters):
 				stage=STAGE_FUTURE, source_doctype="Purchase Order", source_document=r.po_name,
 				supplier=r.supplier, supplier_name=r.supplier_name, purchase_order=r.po_name,
 				item_code=r.item_code, item_name=r.item_name,
-				expected_delivery_date=r.schedule_date or r.po_schedule_date,
+				expected_delivery_date=expected_delivery,
 				forecast_date=add_days(base_date, credit_days),
 				gross=gross * portion, paid=advanced * tax_mult * portion, forecast=amt,
 				currency=r.currency, payment_term=term or _("On delivery"),
-				remarks=_("Forecast: expected delivery + {0}d{1}").format(credit_days, _(" ({0})").format(term) if term else ""),
+				remarks=_("Forecast: {0} + {1}d{2}").format(
+					_("today (delivery overdue)") if clamped else _("expected delivery"),
+					credit_days,
+					_(" ({0})").format(term) if term else "",
+				),
 			))
 	return rows
 

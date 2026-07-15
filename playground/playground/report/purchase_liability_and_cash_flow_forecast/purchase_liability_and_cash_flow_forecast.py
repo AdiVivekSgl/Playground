@@ -158,17 +158,29 @@ def _get_actual_rows(filters):
 		conv = flt(pi.conversion_rate) or 1.0
 		sched = sched_by_pi.get(pi.name)
 		if sched:
+			# Distribute the invoice's ACTUAL outstanding_amount across the
+			# milestones, earliest due first (payments settle the earliest terms
+			# first). Trusting each row's own paid_amount/outstanding over-reports
+			# a partially paid invoice: those fields are only maintained when
+			# payments are allocated per payment term, which most sites don't do -
+			# so a part-paid invoice would otherwise show its FULL value here.
+			sched = sorted(
+				sched, key=lambda s: getdate(s.due_date or pi.due_date or pi.posting_date)
+			)
+			total_sched = sum(flt(s.payment_amount) for s in sched)
+			remaining_paid = max(0.0, total_sched - flt(pi.outstanding_amount))
 			for s in sched:
-				out = flt(s.outstanding)
-				if out <= 0:
-					out = max(0.0, flt(s.payment_amount) - flt(s.paid_amount))
+				pa = flt(s.payment_amount)
+				applied = min(pa, remaining_paid)  # portion of this milestone already paid
+				remaining_paid -= applied
+				out = pa - applied
 				if out <= 0.0001:
 					continue
 				rows.append(_row(
 					stage=STAGE_ACTUAL, source_doctype="Purchase Invoice", source_document=pi.name,
 					supplier=pi.supplier, supplier_name=pi.supplier_name, purchase_invoice=pi.name,
 					forecast_date=s.due_date or pi.due_date or pi.posting_date,
-					gross=flt(s.payment_amount) * conv, paid=flt(s.paid_amount) * conv,
+					gross=pa * conv, paid=applied * conv,
 					forecast=out * conv, currency=pi.currency,
 					payment_term=s.payment_term or s.description or _("Invoice milestone"),
 					remarks=_("Actual due date (Payment Schedule)"),
@@ -263,6 +275,7 @@ def _get_future_rows(filters):
 		return []
 
 	supplier_terms = _supplier_terms_map({r.supplier for r in items})
+	today = getdate(nowdate())
 
 	rows = []
 	for r in items:
@@ -274,7 +287,16 @@ def _get_future_rows(filters):
 		tax_mult = _tax_mult(r.base_grand_total, r.base_net_total)
 		future = future_net * tax_mult
 		gross = flt(r.base_amount) * tax_mult
-		base_date = r.schedule_date or r.po_schedule_date or r.transaction_date
+
+		# Expected delivery per the PO (item row, else header). Shown as-is in the
+		# Expected Delivery Date column.
+		expected_delivery = r.schedule_date or r.po_schedule_date
+		# For the payment FORECAST only, never assume goods arrive in the past: use
+		# the greater of today or the expected delivery date as the base date.
+		edd = expected_delivery or r.transaction_date
+		base_date = max(today, getdate(edd)) if edd else today
+		clamped = edd and getdate(edd) < today
+
 		template = r.payment_terms_template or supplier_terms.get(r.supplier)
 		for portion, credit_days, term in _terms_milestones(template):
 			amt = future * portion
@@ -284,11 +306,15 @@ def _get_future_rows(filters):
 				stage=STAGE_FUTURE, source_doctype="Purchase Order", source_document=r.po_name,
 				supplier=r.supplier, supplier_name=r.supplier_name, purchase_order=r.po_name,
 				item_code=r.item_code, item_name=r.item_name,
-				expected_delivery_date=r.schedule_date or r.po_schedule_date,
+				expected_delivery_date=expected_delivery,
 				forecast_date=add_days(base_date, credit_days),
 				gross=gross * portion, paid=advanced * tax_mult * portion, forecast=amt,
 				currency=r.currency, payment_term=term or _("On delivery"),
-				remarks=_("Forecast: expected delivery + {0}d{1}").format(credit_days, _(" ({0})").format(term) if term else ""),
+				remarks=_("Forecast: {0} + {1}d{2}").format(
+					_("today (delivery overdue)") if clamped else _("expected delivery"),
+					credit_days,
+					_(" ({0})").format(term) if term else "",
+				),
 			))
 	return rows
 

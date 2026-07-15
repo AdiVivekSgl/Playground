@@ -158,17 +158,29 @@ def _get_actual_rows(filters):
 		conv = flt(pi.conversion_rate) or 1.0
 		sched = sched_by_pi.get(pi.name)
 		if sched:
+			# Distribute the invoice's ACTUAL outstanding_amount across the
+			# milestones, earliest due first (payments settle the earliest terms
+			# first). Trusting each row's own paid_amount/outstanding over-reports
+			# a partially paid invoice: those fields are only maintained when
+			# payments are allocated per payment term, which most sites don't do -
+			# so a part-paid invoice would otherwise show its FULL value here.
+			sched = sorted(
+				sched, key=lambda s: getdate(s.due_date or pi.due_date or pi.posting_date)
+			)
+			total_sched = sum(flt(s.payment_amount) for s in sched)
+			remaining_paid = max(0.0, total_sched - flt(pi.outstanding_amount))
 			for s in sched:
-				out = flt(s.outstanding)
-				if out <= 0:
-					out = max(0.0, flt(s.payment_amount) - flt(s.paid_amount))
+				pa = flt(s.payment_amount)
+				applied = min(pa, remaining_paid)  # portion of this milestone already paid
+				remaining_paid -= applied
+				out = pa - applied
 				if out <= 0.0001:
 					continue
 				rows.append(_row(
 					stage=STAGE_ACTUAL, source_doctype="Purchase Invoice", source_document=pi.name,
 					supplier=pi.supplier, supplier_name=pi.supplier_name, purchase_invoice=pi.name,
 					forecast_date=s.due_date or pi.due_date or pi.posting_date,
-					gross=flt(s.payment_amount) * conv, paid=flt(s.paid_amount) * conv,
+					gross=pa * conv, paid=applied * conv,
 					forecast=out * conv, currency=pi.currency,
 					payment_term=s.payment_term or s.description or _("Invoice milestone"),
 					remarks=_("Actual due date (Payment Schedule)"),

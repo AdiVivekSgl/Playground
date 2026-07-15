@@ -54,6 +54,11 @@ STAGE_ACTUAL = "Actual"
 STAGE_UNBILLED = "Received / Unbilled"
 STAGE_FUTURE = "Future Commitment"
 
+# Hard cutoff: liabilities with a forecast payment date before this date are
+# always hidden, regardless of the Include Overdue / From Date filters. Change
+# here if the reporting horizon moves.
+HARD_MIN_DATE = "2026-04-01"
+
 
 def execute(filters=None):
 	filters = frappe._dict(filters or {})
@@ -329,9 +334,14 @@ def _finalize_rows(rows, filters):
 	from_date = getdate(filters.get("from_date")) if filters.get("from_date") else None
 	to_date = getdate(filters.get("to_date")) if filters.get("to_date") else None
 
+	hard_min = getdate(HARD_MIN_DATE)
+
 	out = []
 	for r in rows:
 		d = r["forecast_payment_date"] or today
+		# Hard cutoff - never show liabilities due before HARD_MIN_DATE.
+		if d < hard_min:
+			continue
 		is_overdue = d < today
 		if not include_overdue and is_overdue:
 			continue

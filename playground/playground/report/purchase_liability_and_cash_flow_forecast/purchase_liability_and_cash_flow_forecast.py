@@ -125,7 +125,7 @@ def _get_actual_rows(filters):
 		"""
 		SELECT pi.name, pi.supplier, pi.supplier_name, pi.posting_date, pi.due_date,
 			pi.outstanding_amount, pi.grand_total, pi.base_grand_total, pi.currency,
-			pi.conversion_rate
+			pi.conversion_rate, pi.credit_to
 		FROM `tabPurchase Invoice` pi
 		WHERE pi.docstatus = 1 AND pi.is_return = 0
 			AND pi.outstanding_amount > 0
@@ -138,10 +138,24 @@ def _get_actual_rows(filters):
 	if not invoices:
 		return []
 
+	# outstanding_amount is stored in the party-account (Credit To) currency, and
+	# Payment Schedule payment_amount in the transaction currency. To avoid forex
+	# rounding / double-conversion we work in COMPANY currency using the stored
+	# base_payment_amount, and convert outstanding only when the payable account
+	# isn't already in company currency.
+	company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
+	credit_accounts = list({i.credit_to for i in invoices if i.credit_to})
+	acct_ccy = {}
+	if credit_accounts:
+		for a in frappe.get_all(
+			"Account", filters={"name": ["in", credit_accounts]}, fields=["name", "account_currency"]
+		):
+			acct_ccy[a.name] = a.account_currency
+
 	names = [i.name for i in invoices]
 	schedule = frappe.db.sql(
 		"""
-		SELECT parent, due_date, payment_amount, paid_amount, outstanding, payment_term, description
+		SELECT parent, due_date, payment_amount, base_payment_amount, payment_term, description
 		FROM `tabPayment Schedule`
 		WHERE parenttype = 'Purchase Invoice' AND parent IN %(names)s
 		ORDER BY idx
@@ -156,32 +170,37 @@ def _get_actual_rows(filters):
 	rows = []
 	for pi in invoices:
 		conv = flt(pi.conversion_rate) or 1.0
+		# Base (company-currency) outstanding: already base when the Credit To
+		# account is in company currency, else convert from account currency.
+		ccy = acct_ccy.get(pi.credit_to)
+		out_in_base = not (ccy and company_currency and ccy != company_currency)
+		base_outstanding = flt(pi.outstanding_amount) if out_in_base else flt(pi.outstanding_amount) * conv
+
 		sched = sched_by_pi.get(pi.name)
 		if sched:
-			# Distribute the invoice's ACTUAL outstanding_amount across the
-			# milestones, earliest due first (payments settle the earliest terms
-			# first). Trusting each row's own paid_amount/outstanding over-reports
-			# a partially paid invoice: those fields are only maintained when
-			# payments are allocated per payment term, which most sites don't do -
-			# so a part-paid invoice would otherwise show its FULL value here.
-			sched = sorted(
-				sched, key=lambda s: getdate(s.due_date or pi.due_date or pi.posting_date)
-			)
-			total_sched = sum(flt(s.payment_amount) for s in sched)
-			remaining_paid = max(0.0, total_sched - flt(pi.outstanding_amount))
+			# Distribute the invoice's ACTUAL (base) outstanding across the
+			# milestones, earliest due first (payments settle earliest terms first).
+			# Trusting each row's own paid/outstanding over-reports a partially paid
+			# invoice - those are only maintained with per-term payment allocation.
+			sched = sorted(sched, key=lambda s: getdate(s.due_date or pi.due_date or pi.posting_date))
+
+			def _mbase(s):
+				return flt(s.base_payment_amount) or (flt(s.payment_amount) * conv)
+
+			total_base = sum(_mbase(s) for s in sched)
+			remaining_paid = max(0.0, total_base - base_outstanding)
 			for s in sched:
-				pa = flt(s.payment_amount)
-				applied = min(pa, remaining_paid)  # portion of this milestone already paid
+				pab = _mbase(s)
+				applied = min(pab, remaining_paid)  # portion of this milestone already paid
 				remaining_paid -= applied
-				out = pa - applied
-				if out <= 0.0001:
+				out = pab - applied
+				if out <= 0.01:  # below currency precision - treat as settled
 					continue
 				rows.append(_row(
 					stage=STAGE_ACTUAL, source_doctype="Purchase Invoice", source_document=pi.name,
 					supplier=pi.supplier, supplier_name=pi.supplier_name, purchase_invoice=pi.name,
 					forecast_date=s.due_date or pi.due_date or pi.posting_date,
-					gross=pa * conv, paid=applied * conv,
-					forecast=out * conv, currency=pi.currency,
+					gross=pab, paid=applied, forecast=out, currency=pi.currency,
 					payment_term=s.payment_term or s.description or _("Invoice milestone"),
 					remarks=_("Actual due date (Payment Schedule)"),
 				))
@@ -190,8 +209,8 @@ def _get_actual_rows(filters):
 				stage=STAGE_ACTUAL, source_doctype="Purchase Invoice", source_document=pi.name,
 				supplier=pi.supplier, supplier_name=pi.supplier_name, purchase_invoice=pi.name,
 				forecast_date=pi.due_date or pi.posting_date,
-				gross=flt(pi.base_grand_total), paid=flt(pi.base_grand_total) - flt(pi.outstanding_amount) * conv,
-				forecast=flt(pi.outstanding_amount) * conv, currency=pi.currency,
+				gross=flt(pi.base_grand_total), paid=flt(pi.base_grand_total) - base_outstanding,
+				forecast=base_outstanding, currency=pi.currency,
 				payment_term=_("Invoice due date"), remarks=_("Actual due date (invoice)"),
 			))
 	return rows
@@ -212,6 +231,7 @@ def _get_unbilled_rows(filters):
 		FROM `tabPurchase Receipt Item` pri
 		INNER JOIN `tabPurchase Receipt` pr ON pr.name = pri.parent
 		WHERE pr.docstatus = 1 AND pr.is_return = 0
+			AND pr.status = 'To Bill'
 			AND pr.company = %(company)s
 			AND (pri.base_amount - IFNULL(pri.billed_amt, 0)) > 0.0001
 			{conds}
@@ -345,9 +365,9 @@ def _row(**kw):
 		"expected_delivery_date": kw.get("expected_delivery_date"),
 		"receipt_date": kw.get("receipt_date"),
 		"forecast_payment_date": getdate(kw["forecast_date"]) if kw.get("forecast_date") else None,
-		"gross_amount": flt(kw.get("gross")),
-		"paid_adjusted": flt(kw.get("paid")),
-		"forecast_liability": flt(kw.get("forecast")),
+		"gross_amount": flt(kw.get("gross"), 2),
+		"paid_adjusted": flt(kw.get("paid"), 2),
+		"forecast_liability": flt(kw.get("forecast"), 2),
 		"currency": kw.get("currency"),
 		"payment_term": kw.get("payment_term"),
 		"remarks": kw.get("remarks"),

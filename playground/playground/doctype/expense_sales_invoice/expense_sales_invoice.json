@@ -1,0 +1,22 @@
+{
+ "doctype": "DocType",
+ "name": "Expense Sales Invoice",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Child table row holding one linked Sales Invoice, used by the Table MultiSelect \"Linked Sales Invoice\" fields on Purchase Invoice and Journal Entry (non-COGS expense attribution).",
+ "fields": [
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "options": "Sales Invoice",
+   "label": "Sales Invoice",
+   "in_list_view": 1,
+   "columns": 8,
+   "reqd": 1
+  }
+ ],
+ "permissions": []
+}

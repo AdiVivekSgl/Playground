@@ -74,12 +74,12 @@
   "dt": "Journal Entry",
   "fieldname": "custom_linked_sales_invoice",
   "label": "Linked Sales Invoice",
-  "fieldtype": "Link",
-  "options": "Sales Invoice",
+  "fieldtype": "Table MultiSelect",
+  "options": "Expense Sales Invoice",
   "insert_after": "user_remark",
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Optional link to the Sales Invoice this (non-COGS) expense is attributed to, so expenses can be tagged against a specific customer / invoice for reporting."
+  "description": "One or more Sales Invoices this (non-COGS) expense is attributed to (multi-select via the Expense Sales Invoice child table), so expenses can be tagged against specific customer invoices for reporting."
  },
  {
   "doctype": "Custom Field",
@@ -90,11 +90,9 @@
   "fieldtype": "Link",
   "options": "Customer",
   "insert_after": "custom_linked_sales_invoice",
-  "fetch_from": "custom_linked_sales_invoice.customer",
-  "read_only": 1,
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Customer this expense is attributed to. Auto-fetched (read-only) from the Linked Sales Invoice; lets non-COGS expenses be grouped by customer without a separate manual entry."
+  "description": "Optional customer this expense is attributed to, for grouping non-COGS expenses. Manual entry - no longer auto-fetched, since Linked Sales Invoice now accepts multiple invoices that may span customers."
  },
  {
   "doctype": "Custom Field",
@@ -102,12 +100,12 @@
   "dt": "Purchase Invoice",
   "fieldname": "custom_linked_sales_invoice",
   "label": "Linked Sales Invoice",
-  "fieldtype": "Link",
-  "options": "Sales Invoice",
+  "fieldtype": "Table MultiSelect",
+  "options": "Expense Sales Invoice",
   "insert_after": "remarks",
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Optional link to the Sales Invoice this (non-COGS) expense is attributed to, so expenses can be tagged against a specific customer / invoice for reporting."
+  "description": "One or more Sales Invoices this (non-COGS) expense is attributed to (multi-select via the Expense Sales Invoice child table), so expenses can be tagged against specific customer invoices for reporting."
  },
  {
   "doctype": "Custom Field",
@@ -118,11 +116,9 @@
   "fieldtype": "Link",
   "options": "Customer",
   "insert_after": "custom_linked_sales_invoice",
-  "fetch_from": "custom_linked_sales_invoice.customer",
-  "read_only": 1,
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Customer this expense is attributed to. Auto-fetched (read-only) from the Linked Sales Invoice; lets non-COGS expenses be grouped by customer without a separate manual entry."
+  "description": "Optional customer this expense is attributed to, for grouping non-COGS expenses. Manual entry - no longer auto-fetched, since Linked Sales Invoice now accepts multiple invoices that may span customers."
  },
  {
   "doctype": "Custom Field",

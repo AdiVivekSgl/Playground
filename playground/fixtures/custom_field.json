@@ -132,5 +132,31 @@
   "allow_on_submit": 1,
   "translatable": 0,
   "description": "Reason captured when the Purchase Order was closed via the list-view bulk \"Close Purchase Orders\" action. Read-only audit trail; blank if closed by other means or without a reason."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Purchase Invoice-custom_is_price_adjustment_debit_note",
+  "dt": "Purchase Invoice",
+  "fieldname": "custom_is_price_adjustment_debit_note",
+  "label": "Is Price Adjustment Debit Note",
+  "fieldtype": "Check",
+  "default": "0",
+  "insert_after": "is_return",
+  "depends_on": "eval:doc.is_return",
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Tick when this Debit Note is a retrospective price/rate reduction only (no physical stock return). Adds a GL reclassification moving the base purchase value from Stock Received But Not Billed to the Purchase Rate Adjustment account (see playground.playground.overrides.purchase_invoice). allow_on_submit so historical debit notes can be flagged for the one-time cleanup patch."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Company-custom_purchase_rate_adjustment_account",
+  "dt": "Company",
+  "fieldname": "custom_purchase_rate_adjustment_account",
+  "label": "Purchase Rate Adjustment Account",
+  "fieldtype": "Link",
+  "options": "Account",
+  "insert_after": "stock_received_but_not_billed",
+  "translatable": 0,
+  "description": "Expense (P&L) account credited when a Price Adjustment Debit Note reclassifies value out of Stock Received But Not Billed. A credit balance here represents a reduction in purchase cost from retrospective supplier price adjustments. Must belong to this Company."
  }
 ]

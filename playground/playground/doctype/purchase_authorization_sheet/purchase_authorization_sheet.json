@@ -1,0 +1,57 @@
+{
+ "doctype": "DocType",
+ "name": "Purchase Authorization Sheet",
+ "module": "Playground",
+ "custom": 0,
+ "is_submittable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "autoname": "naming_series:",
+ "title_field": "linked_production_plan",
+ "description": "Management-level purchase authorization (PAS) sitting between the Production Plan and Purchase Orders: upload the 'Approved for Purchase' Excel to populate the item table, then approve line by line.",
+ "field_order": [
+  "naming_series", "linked_production_plan", "company", "column_break_hdr",
+  "prepared_by", "prepared_on", "status",
+  "period_section", "planning_period_from", "planning_period_to", "production_starts",
+  "upload_section", "upload_excel",
+  "summary_section", "total_items", "critical_items", "expected_vendors", "column_break_sum",
+  "new_purchase_value", "existing_stock_value", "approved_value", "cash_requirement",
+  "items_section", "items", "amended_from"
+ ],
+ "fields": [
+  {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "PAS-.#####", "default": "PAS-.#####", "reqd": 1},
+  {"fieldname": "linked_production_plan", "fieldtype": "Link", "options": "Production Plan", "label": "Linked Production Plan"},
+  {"fieldname": "company", "fieldtype": "Link", "options": "Company", "label": "Company", "reqd": 1},
+  {"fieldname": "column_break_hdr", "fieldtype": "Column Break"},
+  {"fieldname": "prepared_by", "fieldtype": "Link", "options": "User", "label": "Prepared By"},
+  {"fieldname": "prepared_on", "fieldtype": "Datetime", "label": "Prepared On"},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Draft\nPending Approval\nApproved\nPartially Approved\nRejected", "default": "Draft", "read_only": 1, "in_list_view": 1, "in_standard_filter": 1, "allow_on_submit": 1},
+
+  {"fieldname": "period_section", "fieldtype": "Section Break", "label": "Planning Period"},
+  {"fieldname": "planning_period_from", "fieldtype": "Date", "label": "Planning Period From"},
+  {"fieldname": "planning_period_to", "fieldtype": "Date", "label": "Planning Period To"},
+  {"fieldname": "production_starts", "fieldtype": "Date", "label": "Production Starts"},
+
+  {"fieldname": "upload_section", "fieldtype": "Section Break", "label": "Upload"},
+  {"fieldname": "upload_excel", "fieldtype": "Attach", "label": "Upload Excel (Approved for Purchase)", "description": "Attach the MR Hierarchy workbook. Its 'Approved for Purchase' sheet (Item, Qty) populates the item table via the 'Populate from Excel' button."},
+
+  {"fieldname": "summary_section", "fieldtype": "Section Break", "label": "Summary"},
+  {"fieldname": "total_items", "fieldtype": "Int", "label": "Total Items", "read_only": 1, "allow_on_submit": 1},
+  {"fieldname": "critical_items", "fieldtype": "Int", "label": "Critical Items", "read_only": 1, "allow_on_submit": 1, "description": "Items where current stock is below the required quantity."},
+  {"fieldname": "expected_vendors", "fieldtype": "Int", "label": "Expected Vendors", "read_only": 1, "allow_on_submit": 1},
+  {"fieldname": "column_break_sum", "fieldtype": "Column Break"},
+  {"fieldname": "new_purchase_value", "fieldtype": "Currency", "label": "New Purchases", "read_only": 1, "allow_on_submit": 1, "description": "Total value of everything To Purchase."},
+  {"fieldname": "existing_stock_value", "fieldtype": "Currency", "label": "Existing Stock (covering requirement)", "read_only": 1, "allow_on_submit": 1},
+  {"fieldname": "approved_value", "fieldtype": "Currency", "label": "Approved Value", "read_only": 1, "allow_on_submit": 1, "description": "Value of the lines ticked Approve."},
+  {"fieldname": "cash_requirement", "fieldtype": "Currency", "label": "Cash Requirement", "read_only": 1, "allow_on_submit": 1, "description": "Cash needed for the approved purchases (= Approved Value)."},
+
+  {"fieldname": "items_section", "fieldtype": "Section Break", "label": "Items"},
+  {"fieldname": "items", "fieldtype": "Table", "options": "Purchase Authorization Item", "label": "Items"},
+  {"fieldname": "amended_from", "fieldtype": "Link", "options": "Purchase Authorization Sheet", "label": "Amended From", "read_only": 1, "no_copy": 1, "print_hide": 1}
+ ],
+ "permissions": [
+  {"role": "Purchase Manager", "read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1},
+  {"role": "Purchase User", "read": 1, "write": 1, "create": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1}
+ ]
+}

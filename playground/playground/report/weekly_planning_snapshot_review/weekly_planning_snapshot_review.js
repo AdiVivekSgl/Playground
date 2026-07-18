@@ -27,6 +27,19 @@ frappe.query_reports["Weekly Planning Snapshot Review"] = {
 	filters: [
 		{ fieldname: "item_code", label: __("FG Item"), fieldtype: "Link", options: "Item" },
 		{ fieldname: "customer", label: __("Customer"), fieldtype: "Link", options: "Customer" },
+		{
+			fieldname: "only_suggested",
+			label: __("Only Suggested Prodn > 0"),
+			fieldtype: "Check",
+			default: 0,
+		},
+		{
+			fieldname: "consolidated",
+			label: __("Consolidated Suggested Prodn"),
+			fieldtype: "Check",
+			default: 0,
+			// One row per item: Item Name, Item Free Stock, total Suggested Prodn.
+		},
 	],
 
 	formatter(value, row, column, data, default_formatter) {
@@ -39,7 +52,38 @@ frappe.query_reports["Weekly Planning Snapshot Review"] = {
 		if (f === "status" && data && WPSR_STATUS_COLORS[data.status]) {
 			return `<div style="background-color:${WPSR_STATUS_COLORS[data.status]};margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
 		}
+		if (f === "suggested_prodn" && data && flt(data.suggested_prodn) > 0) {
+			return `<div style="background-color:#fff3e0;margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
+		}
 		return formatted;
+	},
+
+	// Make Buffer editable; editing it recomputes Suggested Prodn live
+	// (max(0, (Pending - Reserved) - Item Free Stock + Buffer)).
+	get_datatable_options(options) {
+		options.columns.forEach((c) => {
+			if (c.id === "buffer") c.editable = true;
+		});
+		options.events = options.events || {};
+		options.events.onSubmitEditing = function (cell) {
+			const [row_values, cell_id, new_val] = cell;
+			if (cell_id !== "buffer") return;
+			let buffer = flt(new_val);
+			if (buffer < 0) buffer = 0;
+			const short = Math.max(0, flt(row_values.pending_qty) - flt(row_values.reserved_qty));
+			const suggested = Math.max(0, short - flt(row_values.item_free_stock) + buffer);
+			const report_row = (frappe.query_report.data || []).find(
+				(r) => r.sales_order_item === row_values.sales_order_item
+			);
+			if (report_row) {
+				report_row.buffer = buffer;
+				report_row.suggested_prodn = suggested;
+			}
+			if (frappe.query_report.datatable) {
+				frappe.query_report.datatable.refresh(frappe.query_report.data);
+			}
+		};
+		return options;
 	},
 
 	onload(report) {

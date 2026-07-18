@@ -19,6 +19,14 @@ doctype_list_js = {
 	"Purchase Order": "public/js/purchase_order_list.js",
 }
 
+# Purchase Invoice controller override: Price Adjustment Debit Note GRNI
+# reclassification (see playground/playground/overrides/purchase_invoice.py).
+# NOTE: only one app may own a doctype class - if another custom app already
+# overrides Purchase Invoice, merge that logic instead of setting this.
+override_doctype_class = {
+	"Purchase Invoice": "playground.playground.overrides.purchase_invoice.CustomPurchaseInvoice",
+}
+
 fixtures = [
 	{
 		"doctype": "Custom Field",
@@ -60,6 +68,17 @@ fixtures = [
 		"filters": [
 			["dt", "=", "Purchase Order"],
 			["fieldname", "=", "custom_closing_reason"],
+		],
+	},
+	# Price Adjustment Debit Note GRNI reclassification: flag on Purchase Invoice
+	# + the target account on Company.
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			["name", "in", [
+				"Purchase Invoice-custom_is_price_adjustment_debit_note",
+				"Company-custom_purchase_rate_adjustment_account",
+			]],
 		],
 	},
 ]

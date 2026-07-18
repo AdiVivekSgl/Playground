@@ -4,6 +4,27 @@
 const WPSR_METHOD_PATH =
 	"playground.playground.report.weekly_planning_snapshot_review.weekly_planning_snapshot_review";
 
+// Reuse FGSRM's exact Production Plan + workbook machinery, so "Create Prodn
+// Plan" here behaves identically to the FGSRM report.
+const WPSR_CREATE_PLAN_METHOD =
+	"playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager.create_production_plan_from_suggested_prodn";
+const WPSR_MR_EXCEL_METHOD =
+	"playground.playground.production_plan_mr_excel.download_fgsrm_mr_excel";
+
+// Download without navigating away (anchor click avoids the async-callback
+// pop-up blocker; attachment response downloads rather than opening a tab).
+function wpsr_download_mr_excel(pp_name, filters_json) {
+	let url = `/api/method/${WPSR_MR_EXCEL_METHOD}?name=${encodeURIComponent(pp_name)}`;
+	if (filters_json) url += `&filters=${encodeURIComponent(filters_json)}`;
+	const a = document.createElement("a");
+	a.href = url;
+	a.target = "_blank";
+	a.rel = "noopener";
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+}
+
 // Colour blocks mirror the style already used in fg_stock_reservation_manager.js
 // (background-color divs, not just text colour).
 const WPSR_BUCKET_COLORS = {
@@ -87,6 +108,51 @@ frappe.query_reports["Weekly Planning Snapshot Review"] = {
 	},
 
 	onload(report) {
+		// Create a Production Plan + download the requirement workbook, same as
+		// the FGSRM report (reuses FGSRM's server methods with this report's
+		// filters).
+		report.page.add_inner_button(
+			__("Create Prodn Plan"),
+			() => {
+				frappe.confirm(
+					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the Production Plan workbook — no need to open the plan."),
+					() => {
+						frappe.call({
+							method: WPSR_CREATE_PLAN_METHOD,
+							args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
+							freeze: true,
+							freeze_message: __("Creating Production Plan…"),
+							callback(r) {
+								const m = r.message;
+								if (!m || !m.name) return;
+								if (m.handed_off) {
+									frappe.show_alert({
+										message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading Production Plan workbook…", [
+											m.name,
+											m.items,
+											m.raw_materials,
+										]),
+										indicator: "green",
+									});
+									wpsr_download_mr_excel(m.name, JSON.stringify(frappe.query_report.get_filter_values()));
+								} else {
+									frappe.show_alert({
+										message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the Production Plan workbook.", [
+											m.name,
+											m.items,
+										]),
+										indicator: "blue",
+									});
+									frappe.set_route("Form", "Production Plan", m.name);
+								}
+							},
+						});
+					}
+				);
+			},
+			__("Reports")
+		);
+
 		report.page.add_inner_button(__("Approve & Save Snapshot"), () => {
 			frappe.confirm(
 				__("This freezes the current open Sales Order demand into a new, submitted Weekly Planning Snapshot — you'll compare against it next time. Continue?"),

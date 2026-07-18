@@ -1,0 +1,25 @@
+{
+ "doctype": "DocType",
+ "name": "Purchase Authorization Item",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {"fieldname": "item_code", "fieldtype": "Link", "options": "Item", "label": "Item", "in_list_view": 1, "columns": 2, "reqd": 1},
+  {"fieldname": "description", "fieldtype": "Data", "label": "Description", "in_list_view": 1, "columns": 2},
+  {"fieldname": "required_qty", "fieldtype": "Float", "label": "Required", "in_list_view": 1, "columns": 1},
+  {"fieldname": "in_stock", "fieldtype": "Float", "label": "In Stock", "read_only": 1, "columns": 1},
+  {"fieldname": "reserved", "fieldtype": "Float", "label": "Reserved", "read_only": 1, "columns": 1},
+  {"fieldname": "to_purchase", "fieldtype": "Float", "label": "To Purchase", "in_list_view": 1, "columns": 1},
+  {"fieldname": "uom", "fieldtype": "Link", "options": "UOM", "label": "UOM", "columns": 1},
+  {"fieldname": "rate", "fieldtype": "Currency", "label": "Rate", "columns": 1},
+  {"fieldname": "value", "fieldtype": "Currency", "label": "Value", "read_only": 1, "in_list_view": 1, "columns": 1},
+  {"fieldname": "lead_time", "fieldtype": "Int", "label": "Lead Time (Days)"},
+  {"fieldname": "required_by", "fieldtype": "Date", "label": "Required By"},
+  {"fieldname": "vendor", "fieldtype": "Link", "options": "Supplier", "label": "Vendor", "columns": 1},
+  {"fieldname": "approve", "fieldtype": "Check", "label": "Approve", "in_list_view": 1, "columns": 1, "allow_on_submit": 1, "default": "0"}
+ ],
+ "permissions": []
+}

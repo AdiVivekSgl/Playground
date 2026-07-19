@@ -19,10 +19,7 @@ outstanding balance; on also includes fully settled ones (outstanding = 0).
 
 import frappe
 from frappe import _
-from frappe.utils import flt, formatdate
-from frappe.query_builder import Field
-from frappe.query_builder.custom import CustomFunction
-from frappe.query_builder.functions import Abs, CurDate
+from frappe.utils import cint, flt, formatdate
 
 
 def execute(filters=None):
@@ -47,42 +44,46 @@ def get_columns():
 
 
 def get_data(filters):
-	PI = frappe.qb.DocType("Purchase Invoice")
-	SUPPLIER = frappe.qb.DocType("Supplier")
-	datediff = CustomFunction("DATEDIFF", ["cur_date", "due_date"])
-
-	query = (
-		frappe.qb.from_(PI)
-		.left_join(SUPPLIER).on(PI.supplier == SUPPLIER.name)
-		.select(
-			PI.name, PI.posting_date, PI.supplier, PI.bill_no, PI.grand_total,
-			PI.bill_date, PI.outstanding_amount, PI.remarks, PI.due_date,
-			datediff(PI.due_date, CurDate()).as_("due_in_days"),
-		)
-		.where(
-			(PI.docstatus == 1)
-			& (PI.posting_date.between("2000-03-31", CurDate()))
-		)
-		.orderby(Field("due_in_days"), order=frappe.qb.asc)
-	)
+	# Plain SQL (DATEDIFF computed in-DB) - avoids query-builder helpers whose
+	# import path varies across Frappe versions.
+	conditions = ["pi.docstatus = 1", "pi.posting_date BETWEEN '2000-03-31' AND CURDATE()"]
+	values = {}
 
 	# Toggle: by default only invoices with something outstanding; when
 	# "Show Transactions with No Due" is on, include fully settled ones too.
 	if not filters.get("show_no_due"):
-		query = query.where(PI.outstanding_amount > 0)
-
+		conditions.append("pi.outstanding_amount > 0")
 	if filters.get("supplier"):
-		query = query.where(PI.supplier == filters.get("supplier"))
+		conditions.append("pi.supplier = %(supplier)s")
+		values["supplier"] = filters.get("supplier")
 	if filters.get("payment_terms_template"):
-		query = query.where(SUPPLIER.payment_terms == filters.get("payment_terms_template"))
-	if filters.get("due_in_days") == "Less than 90":
-		query = query.having(Abs(Field("due_in_days")) < 90)
-	if filters.get("due_in_days") == "More than 90":
-		query = query.having(Abs(Field("due_in_days")) > 90)
-	if filters.get("no_of_due_days"):
-		query = query.having(Abs(Field("due_in_days")) <= filters.get("no_of_due_days"))
+		conditions.append("s.payment_terms = %(ptt)s")
+		values["ptt"] = filters.get("payment_terms_template")
 
-	data = query.run(as_dict=True)
+	having = []
+	if filters.get("due_in_days") == "Less than 90":
+		having.append("ABS(due_in_days) < 90")
+	elif filters.get("due_in_days") == "More than 90":
+		having.append("ABS(due_in_days) > 90")
+	if filters.get("no_of_due_days"):
+		having.append("ABS(due_in_days) <= %(nod)s")
+		values["nod"] = cint(filters.get("no_of_due_days"))
+	having_clause = ("HAVING " + " AND ".join(having)) if having else ""
+
+	data = frappe.db.sql(
+		"""
+		SELECT pi.name, pi.posting_date, pi.supplier, pi.bill_no, pi.grand_total,
+			pi.bill_date, pi.outstanding_amount, pi.remarks, pi.due_date,
+			DATEDIFF(pi.due_date, CURDATE()) AS due_in_days
+		FROM `tabPurchase Invoice` pi
+		LEFT JOIN `tabSupplier` s ON s.name = pi.supplier
+		WHERE {conditions}
+		{having_clause}
+		ORDER BY due_in_days ASC
+		""".format(conditions=" AND ".join(conditions), having_clause=having_clause),
+		values,
+		as_dict=True,
+	)
 
 	# Payment Date column: payments/allocations posted against each invoice.
 	pay_map = _payment_map([r["name"] for r in data])

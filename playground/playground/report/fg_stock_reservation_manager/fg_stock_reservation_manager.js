@@ -318,25 +318,25 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			__("Reports")
 		);
 
-		// ── Freeze this filtered view's open-SO demand into a new, submitted
-		// Weekly Planning Snapshot (its Items table is pre-populated by
-		// approve_snapshot() server-side - nothing further to fill in). ──
+		// ── Freeze this filtered view's open-SO demand into a new DRAFT Weekly
+		// Planning Snapshot (items pre-populated server-side). Review it - adjust
+		// Committed Prodn line-wise - then Submit on the form to approve. ──
 		report.page.add_inner_button(
-			__("Create Weekly Snapshot"),
+			__("Create Weekly Snapshot (Draft)"),
 			() => {
 				frappe.confirm(
-					__("This freezes the current open Sales Order demand (for this filtered view) into a new, submitted Weekly Planning Snapshot. Continue?"),
+					__("This freezes the current open Sales Order demand (for this filtered view) into a new DRAFT Weekly Planning Snapshot. Review it (adjust Committed Prodn), then Submit to approve. Continue?"),
 					() => {
 						frappe.call({
 							method: "playground.playground.report.weekly_planning_snapshot_review.weekly_planning_snapshot_review.approve_snapshot",
 							args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
 							freeze: true,
-							freeze_message: __("Saving snapshot…"),
+							freeze_message: __("Creating draft snapshot…"),
 							callback(r) {
 								if (r.message) {
 									frappe.show_alert({
-										message: __("Snapshot {0} approved and submitted.", [r.message]),
-										indicator: "green",
+										message: __("Draft snapshot {0} created — review and submit to approve.", [r.message]),
+										indicator: "blue",
 									});
 									frappe.set_route("Form", "Weekly Planning Snapshot", r.message);
 								}

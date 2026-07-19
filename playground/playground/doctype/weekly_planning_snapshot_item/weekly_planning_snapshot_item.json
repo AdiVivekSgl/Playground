@@ -79,7 +79,24 @@
    "in_list_view": 1,
    "columns": 1,
    "read_only": 1,
-   "description": "The item's stock-warehouse free stock (actual - all reservations) at the moment this snapshot was approved. A stable per-item fact (unlike Reservable Qty, which is FIFO-allocated across whichever other lines happened to be in view), so it reads the same on re-open weeks later."
+   "description": "The item's stock-warehouse free stock (actual - reservations against Sales Orders only) frozen at draft creation. A stable per-item fact (unlike Reservable Qty, which is FIFO-allocated across whichever other lines happened to be in view)."
+  },
+  {
+   "fieldname": "suggested_prodn",
+   "fieldtype": "Float",
+   "label": "Suggested Prodn",
+   "in_list_view": 1,
+   "columns": 1,
+   "read_only": 1,
+   "description": "System suggestion (FGSRM logic): max(0, (Pending - Reserved) - Item Free Stock). Read-only reference."
+  },
+  {
+   "fieldname": "committed_prodn",
+   "fieldtype": "Float",
+   "label": "Committed Prodn",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "The qty production commits to produce for this SO/item line. Prepopulated from Suggested Prodn and editable on the draft; independent of Suggested (never added to it). The Production Plan is built from this."
   }
  ],
  "permissions": []

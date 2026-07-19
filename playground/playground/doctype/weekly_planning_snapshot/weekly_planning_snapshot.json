@@ -63,12 +63,29 @@
    "label": "Snapshot Items"
   },
   {
+   "fieldname": "only_suggested",
+   "fieldtype": "Check",
+   "label": "Only Suggested Prodn > 0",
+   "default": "0",
+   "description": "Client-side view filter - hides item rows with Suggested Prodn = 0. Does not change the data."
+  },
+  {
    "fieldname": "items",
    "fieldtype": "Table",
    "options": "Weekly Planning Snapshot Item",
    "label": "Items",
    "reqd": 1,
-   "description": "Frozen at approval time. If a snapshot was approved in error, cancel it (standard Frappe cancel+amend) and re-run the Weekly Planning Snapshot Review report instead of editing these rows."
+   "description": "Populated as a DRAFT from open Sales Orders. Review and adjust Committed Prodn line-wise, then Submit to approve (values freeze). To re-do an approved snapshot, cancel + amend."
+  },
+  {
+   "fieldname": "consolidated_section",
+   "fieldtype": "Section Break",
+   "label": "Consolidated Requirement"
+  },
+  {
+   "fieldname": "consolidated_requirement_html",
+   "fieldtype": "HTML",
+   "label": "Consolidated Requirement"
   }
  ],
  "permissions": [

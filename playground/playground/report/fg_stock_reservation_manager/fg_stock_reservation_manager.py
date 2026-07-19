@@ -700,6 +700,32 @@ def create_production_plan_from_suggested_prodn(filters=None):
 	if not prodn_by_item:
 		frappe.throw(_("Nothing to produce — every item's Suggested Prodn is zero for this view."))
 
+	return _build_production_plan(prodn_by_item)
+
+
+@frappe.whitelist()
+def create_production_plan_from_snapshot(snapshot):
+	"""Build a Production Plan from a Weekly Planning Snapshot's itemwise Committed
+	Prodn (what production commits to produce), then the nested chain + workbook -
+	same builder as the FGSRM report."""
+	if not frappe.has_permission("Production Plan", "create"):
+		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
+	doc = frappe.get_doc("Weekly Planning Snapshot", snapshot)
+	prodn_by_item = {}
+	for d in doc.items:
+		qty = flt(d.committed_prodn)
+		if qty > 0:
+			prodn_by_item[d.item_code] = prodn_by_item.get(d.item_code, 0.0) + qty
+	if not prodn_by_item:
+		frappe.throw(_("Nothing to produce — every line's Committed Prodn is zero."))
+	return _build_production_plan(prodn_by_item)
+
+
+def _build_production_plan(prodn_by_item):
+	"""Build a DRAFT Production Plan from {item_code: qty}: tag it for the frontec
+	subsystem, seed raw materials + the full nested chain, and return a summary.
+	Shared by create_production_plan_from_suggested_prodn (FGSRM) and
+	create_production_plan_from_snapshot (Weekly Planning Snapshot)."""
 	company = (
 		frappe.defaults.get_user_default("Company")
 		or frappe.db.get_single_value("Global Defaults", "default_company")

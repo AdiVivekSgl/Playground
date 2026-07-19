@@ -12,12 +12,20 @@ Reused, not reimplemented (see those modules for the actual queries):
   - get_open_so_items / get_item_map / get_stock_map   (production_requirement_report)
   - get_line_reserved_map                              (fg_stock_reservation_manager)
 
-Item Free Stock column/field = actual_qty - Bin.reserved_qty (ALL reservations,
-STOCK_WAREHOUSE) for that item - a stable per-item fact, chosen deliberately
-over Reservable Qty (FGSRM's per-line, FIFO-allocated figure) because this
-value gets frozen into an immutable snapshot: it means the same thing on
-re-read weeks later, regardless of which other lines happened to be in view
-when it was computed.
+Item Free Stock column/field = actual_qty - reservations against SALES ORDERS
+only (Stock Reservation Entry, voucher_type = Sales Order, STOCK_WAREHOUSE) for
+that item - a stable per-item fact, chosen deliberately over Reservable Qty
+(FGSRM's per-line, FIFO-allocated figure) because this value gets frozen into an
+immutable snapshot: it means the same thing on re-read weeks later. Non-SO
+reservations (production/pick-list/etc.) do not reduce it.
+
+Suggested Prodn (same logic as the FGSRM report):
+  Short to Complete = max(0, Pending - Reserved)
+  Suggested Prodn   = max(0, Short to Complete - Item Free Stock + Buffer)
+Buffer defaults from the item's safety stock and is editable in the grid (client
+side, recomputes Suggested Prodn). Toggles: "Only Suggested Prodn > 0" and
+"Consolidated Suggested Prodn" (one row per item: Item Name, Item Free Stock,
+total Suggested Prodn).
 
 Diff (by sales_order_item, the SO Item child row name):
   - In both, same pending_qty      -> Unchanged
@@ -48,9 +56,10 @@ technically "open"):
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
+	STOCK_WAREHOUSE,
 	get_open_so_items,
 	get_item_map,
 	get_stock_map,
@@ -72,11 +81,13 @@ def execute(filters=None):
 
 	fg_items = sorted({r.item_code for r in so_items} | {b.item_code for b in baseline_items if b.item_code})
 	item_map = get_item_map(fg_items)
-	# Live Item Free Stock (actual - ALL reservations, STOCK_WAREHOUSE) for
-	# fresh lines. Closed (baseline-only) lines show their FROZEN value instead
-	# - the point of a snapshot fact is what it was at approval time, not what
-	# it is now.
+	# Live Item Free Stock = actual - reservations made against SALES ORDERS only
+	# (Stock Reservation Entry, voucher_type = Sales Order, STOCK_WAREHOUSE) - so
+	# non-SO reservations (e.g. production/pick-list) don't reduce it. Fresh lines
+	# use this live figure; Closed (baseline-only) lines keep their FROZEN value -
+	# the point of a snapshot fact is what it was at approval time.
 	stock_map = get_stock_map(fg_items)
+	so_reserved_map = _so_reserved_map(fg_items)
 
 	# Preserve fresh-pull order, then append any baseline-only (closed) keys.
 	all_keys = [r.so_item for r in so_items]
@@ -112,7 +123,7 @@ def execute(filters=None):
 			pending_qty = flt(f.pending_qty)
 			reserved_qty = flt((line_reserved.get(key) or {}).get("reserved_qty"))
 			item_free_stock = flt((stock_map.get(item_code) or {}).get("actual_qty")) - flt(
-				(stock_map.get(item_code) or {}).get("reserved_qty")
+				so_reserved_map.get(item_code, 0.0)
 			)
 		else:
 			item_code = b.item_code
@@ -127,6 +138,14 @@ def execute(filters=None):
 		if not item_name and b:
 			item_name = b.item_name
 
+		# Suggested Prodn - same logic as the FGSRM report:
+		#   Short to Complete = max(0, pending - reserved)
+		#   Suggested Prodn   = max(0, Short - Item Free Stock + Buffer)
+		# Buffer defaults from the item's safety stock and is editable in the grid.
+		buffer = flt((item_map.get(item_code) or {}).get("safety_stock"))
+		short_to_complete = max(0.0, pending_qty - reserved_qty)
+		suggested_prodn = max(0.0, short_to_complete - flt(item_free_stock) + buffer)
+
 		data.append(
 			{
 				"item_code": item_code,
@@ -137,12 +156,23 @@ def execute(filters=None):
 				"pending_qty": pending_qty,
 				"reserved_qty": reserved_qty,
 				"item_free_stock": item_free_stock,
+				"suggested_prodn": suggested_prodn,
 				"qty_delta": delta,
 				"diff_bucket": bucket,
 				"status": statuses.get(key),
 				"sales_order_item": key,
+				"buffer": buffer,
 			}
 		)
+
+	# Toggle: only rows with a positive Suggested Prodn.
+	if cint(filters.get("only_suggested")):
+		data = [d for d in data if flt(d["suggested_prodn"]) > 0]
+
+	# Toggle: consolidate to one row per item (Item Name, Item Free Stock, total
+	# Suggested Prodn across the item's rows).
+	if cint(filters.get("consolidated")):
+		data = _consolidate(data)
 
 	return get_columns(), data
 
@@ -157,11 +187,54 @@ def get_columns():
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Item Free Stock"), "fieldname": "item_free_stock", "fieldtype": "Float", "width": 130},
+		{"label": _("Suggested Prodn"), "fieldname": "suggested_prodn", "fieldtype": "Float", "width": 130},
 		{"label": _("Qty Delta"), "fieldname": "qty_delta", "fieldtype": "Float", "width": 100},
 		{"label": _("Diff Bucket"), "fieldname": "diff_bucket", "fieldtype": "Data", "width": 120},
 		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 160},
 		{"label": _("SO Item"), "fieldname": "sales_order_item", "fieldtype": "Data", "hidden": 1, "width": 100},
+		# Editable (client-side) - defaults from item safety stock; recomputes
+		# Suggested Prodn live. Kept at the extreme right.
+		{"label": _("Buffer"), "fieldname": "buffer", "fieldtype": "Float", "width": 100},
 	]
+
+
+def _so_reserved_map(fg_items):
+	"""{item_code: qty reserved against Sales Orders in STOCK_WAREHOUSE}. Only
+	Stock Reservation Entries with voucher_type = 'Sales Order' - non-SO
+	reservations are excluded so they don't reduce Item Free Stock."""
+	if not fg_items or not frappe.db.table_exists("Stock Reservation Entry"):
+		return {}
+	rows = frappe.db.sql(
+		"""
+		SELECT item_code, SUM(reserved_qty) AS qty
+		FROM `tabStock Reservation Entry`
+		WHERE docstatus = 1 AND voucher_type = 'Sales Order'
+			AND warehouse = %(wh)s AND item_code IN %(items)s
+		GROUP BY item_code
+		""",
+		{"wh": STOCK_WAREHOUSE, "items": fg_items},
+		as_dict=True,
+	)
+	return {r.item_code: flt(r.qty) for r in rows}
+
+
+def _consolidate(rows):
+	"""One row per item: Item Name, Item Free Stock (per-item), and the total
+	Suggested Prodn across the item's rows. All other columns are left blank."""
+	out = {}
+	order = []
+	for r in rows:
+		ic = r["item_code"]
+		if ic not in out:
+			out[ic] = {
+				"item_code": ic,
+				"item_name": r["item_name"],
+				"item_free_stock": r["item_free_stock"],
+				"suggested_prodn": 0.0,
+			}
+			order.append(ic)
+		out[ic]["suggested_prodn"] += flt(r["suggested_prodn"])
+	return [out[ic] for ic in order]
 
 
 def _get_baseline_items():
@@ -299,10 +372,11 @@ def approve_snapshot(filters=None):
 	reserved_map = get_line_reserved_map([r.so_item for r in so_items])
 	fg_items = sorted({r.item_code for r in so_items})
 	item_map = get_item_map(fg_items)
-	# Item Free Stock is frozen at approval time - a stable per-item fact
-	# (actual - ALL reservations, STOCK_WAREHOUSE), not the FIFO-allocated
-	# Reservable Qty FGSRM shows live (see module docstring for why).
+	# Item Free Stock frozen at approval time - actual minus reservations made
+	# against SALES ORDERS only (STOCK_WAREHOUSE), matching the report's live
+	# basis. A stable per-item fact, not the FIFO-allocated Reservable Qty.
 	stock_map = get_stock_map(fg_items)
+	so_reserved_map = _so_reserved_map(fg_items)
 
 	snap = frappe.new_doc("Weekly Planning Snapshot")
 	snap.snapshot_date = frappe.utils.nowdate()
@@ -320,7 +394,7 @@ def approve_snapshot(filters=None):
 				"so_date": r.transaction_date,
 				"pending_qty": r.pending_qty,
 				"reserved_qty": flt(res.get("reserved_qty")),
-				"item_free_stock": flt(stock.get("actual_qty")) - flt(stock.get("reserved_qty")),
+				"item_free_stock": flt(stock.get("actual_qty")) - flt(so_reserved_map.get(r.item_code, 0.0)),
 			},
 		)
 

@@ -52,6 +52,7 @@ from frappe.utils import flt
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
 	STOCK_WAREHOUSE,
+	CUSTOM_DELIVERY_DATE_FIELD,
 	get_open_so_items,
 	get_item_map,
 	get_stock_map,
@@ -303,6 +304,7 @@ def approve_snapshot(filters=None):
 	item_map = get_item_map(fg_items)
 	stock_map = get_stock_map(fg_items)
 	so_reserved_map = _so_reserved_map(fg_items)
+	dispatch_date_map = _dispatch_date_map({r.sales_order for r in so_items})
 
 	snap = frappe.new_doc("Weekly Planning Snapshot")
 	snap.snapshot_date = frappe.utils.nowdate()
@@ -323,7 +325,7 @@ def approve_snapshot(filters=None):
 				"item_code": r.item_code,
 				"item_name": (item_map.get(r.item_code) or {}).get("item_name"),
 				"customer": r.customer,
-				"so_date": r.transaction_date,
+				"so_date": dispatch_date_map.get(r.sales_order) or r.transaction_date,
 				"pending_qty": pending,
 				"reserved_qty": reserved,
 				"item_free_stock": free,
@@ -334,6 +336,24 @@ def approve_snapshot(filters=None):
 
 	snap.insert()
 	return snap.name
+
+
+def _dispatch_date_map(sales_orders):
+	"""{sales_order: dispatch priority date} - custom_updated_delivery_date (the
+	FGSRM Dispatch Priority Date), falling back to delivery_date then
+	transaction_date. Guarded so it runs on a site without the custom field."""
+	sales_orders = [s for s in sales_orders if s]
+	if not sales_orders:
+		return {}
+	has_custom = frappe.db.has_column("Sales Order", CUSTOM_DELIVERY_DATE_FIELD)
+	fields = ["name", "delivery_date", "transaction_date"]
+	if has_custom:
+		fields.append(CUSTOM_DELIVERY_DATE_FIELD)
+	rows = frappe.get_all("Sales Order", filters={"name": ["in", sales_orders]}, fields=fields)
+	out = {}
+	for r in rows:
+		out[r.name] = (r.get(CUSTOM_DELIVERY_DATE_FIELD) if has_custom else None) or r.delivery_date or r.transaction_date
+	return out
 
 
 def _so_reserved_map(fg_items):

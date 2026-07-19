@@ -43,18 +43,29 @@
   },
   {
    "fieldname": "customer",
-   "fieldtype": "Link",
-   "options": "Customer",
+   "fieldtype": "Data",
    "label": "Customer",
    "in_list_view": 1,
    "columns": 2,
-   "read_only": 1
+   "read_only": 1,
+   "description": "Customer of the Sales Order this line came from. Data (not a Link) so a surplus 'Buffer' row can carry the label \"Buffer\"."
+  },
+  {
+   "fieldname": "is_buffer",
+   "fieldtype": "Check",
+   "label": "Is Buffer",
+   "default": "0",
+   "hidden": 1,
+   "read_only": 1,
+   "no_copy": 1,
+   "description": "Set on the synthetic row that holds an item's surplus Committed Prodn (Committed beyond the Sales Order lines' requirement). Shown with Customer = \"Buffer\"."
   },
   {
    "fieldname": "so_date",
    "fieldtype": "Date",
-   "label": "SO Date",
-   "read_only": 1
+   "label": "Dispatch Priority Date",
+   "read_only": 1,
+   "description": "The Sales Order's Dispatch Priority Date (custom_updated_delivery_date, else delivery/transaction date) - the same date FGSRM uses. Allocation of consolidated Committed Prodn back to lines is ordered by this date, earliest first."
   },
   {
    "fieldname": "pending_qty",

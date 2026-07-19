@@ -37,6 +37,10 @@ class WeeklyPlanningSnapshot(Document):
 		logic). Committed Prodn is prepopulated from Suggested only when it's empty
 		- user edits are never clobbered."""
 		for d in self.items:
+			if d.is_buffer:
+				# Synthetic surplus row - no SO requirement; keep its Committed as set.
+				d.suggested_prodn = 0.0
+				continue
 			d.suggested_prodn = max(0.0, max(0.0, flt(d.pending_qty) - flt(d.reserved_qty)) - flt(d.item_free_stock))
 			# Default Committed to Suggested only when unset - preserve edits
 			# (including a deliberate 0).

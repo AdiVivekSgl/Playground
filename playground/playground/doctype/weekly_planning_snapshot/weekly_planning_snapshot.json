@@ -63,29 +63,32 @@
    "label": "Snapshot Items"
   },
   {
-   "fieldname": "only_suggested",
+   "fieldname": "view_mode",
+   "fieldtype": "Select",
+   "label": "View",
+   "options": "Detailed\nConsolidated",
+   "default": "Detailed",
+   "description": "Detailed = per Sales Order line. Consolidated = one row per Item Code; editing Committed Prodn there allocates back to the SO lines by Sales Order Date priority. Switching the view never changes data."
+  },
+  {
+   "fieldname": "hide_zero_rows",
    "fieldtype": "Check",
-   "label": "Only Suggested Prodn > 0",
+   "label": "Hide Zero Rows",
    "default": "0",
-   "description": "Client-side view filter - hides item rows with Suggested Prodn = 0. Does not change the data."
+   "description": "Client-side view filter - hides rows with Committed Prodn = 0 (per line in Detailed, per item in Consolidated). Does not change the data."
   },
   {
    "fieldname": "items",
    "fieldtype": "Table",
    "options": "Weekly Planning Snapshot Item",
-   "label": "Items",
+   "label": "Items (Detailed)",
    "reqd": 1,
-   "description": "Populated as a DRAFT from open Sales Orders. Review and adjust Committed Prodn line-wise, then Submit to approve (values freeze). To re-do an approved snapshot, cancel + amend."
-  },
-  {
-   "fieldname": "consolidated_section",
-   "fieldtype": "Section Break",
-   "label": "Consolidated Requirement"
+   "description": "The single source of truth (one row per Sales Order line). Populated as a DRAFT from open Sales Orders; adjust Committed Prodn line-wise (or via the Consolidated view), then Submit to approve. To re-do an approved snapshot, cancel + amend."
   },
   {
    "fieldname": "consolidated_requirement_html",
    "fieldtype": "HTML",
-   "label": "Consolidated Requirement"
+   "label": "Items (Consolidated)"
   }
  ],
  "permissions": [

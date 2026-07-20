@@ -10,6 +10,26 @@ function wps_esc(v) {
 	return frappe.utils.escape_html(v == null ? "" : String(v));
 }
 
+// Round up to the nearest whole number (with a tiny epsilon so float-summation
+// noise like 15.0000000002 doesn't tip a clean total up to 16).
+function wps_ceil(v) {
+	return Math.ceil(flt(v) - 1e-9);
+}
+
+// Whole-number currency (no decimals). format_currency respects an explicit 0
+// precision; guarded because it isn't defined on every Frappe build.
+function wps_money0(v) {
+	const val = wps_ceil(v);
+	if (typeof format_currency === "function") {
+		try {
+			return format_currency(val, null, 0);
+		} catch (e) {
+			/* fall through to plain number */
+		}
+	}
+	return format_number(val, null, 0);
+}
+
 function wps_download_mr_excel(pp_name) {
 	const a = document.createElement("a");
 	a.href = `/api/method/${WPS_MR_EXCEL_METHOD}?name=${encodeURIComponent(pp_name)}`;
@@ -56,6 +76,7 @@ frappe.ui.form.on("Weekly Planning Snapshot Item", {
 // ─────────────────────────────────────────────────────────────────────────
 function wps_render(frm) {
 	if (frm.doc.view_mode === "Consolidated") wps_render_consolidated(frm);
+	else if (frm.doc.view_mode === "Dispatch") wps_render_dispatch(frm);
 	else wps_render_detailed(frm);
 	wps_render_metrics(frm);
 }
@@ -78,14 +99,12 @@ function wps_render_metrics(frm) {
 	// surplus is committed beyond the SO requirement).
 	const achievement = suggested > 0 ? (committed / suggested) * 100 : committed > 0 ? 100 : 0;
 
-	// frappe.format (Currency) is used rather than the global format_currency,
-	// which isn't defined on every Frappe build - an undefined-reference there
-	// would throw and silently drop the whole card strip.
+	// All card values are shown as whole numbers, rounded UP (wps_ceil / wps_money0).
 	const cards = [
-		{ label: __("Suggested Count"), value: format_number(suggested) },
-		{ label: __("Achievement %"), value: flt(achievement, 1) + "%" },
-		{ label: __("Committed Prodn Count"), value: format_number(committed) },
-		{ label: __("Committed Prodn Value"), value: frappe.format(value, { fieldtype: "Currency" }) },
+		{ label: __("Suggested Count"), value: format_number(wps_ceil(suggested), null, 0) },
+		{ label: __("Achievement %"), value: wps_ceil(achievement) + "%" },
+		{ label: __("Committed Prodn Count"), value: format_number(wps_ceil(committed), null, 0) },
+		{ label: __("Committed Prodn Value"), value: wps_money0(value) },
 	];
 
 	field.$wrapper.html(
@@ -108,10 +127,14 @@ function wps_render_detailed(frm) {
 	const editable = frm.doc.docstatus === 0;
 	const hideZero = frm.doc.hide_zero_rows;
 
+	// Sorted by Dispatch Priority Date, then Customer (buffer rows - no date - fall
+	// to the bottom; item_code is only a final tiebreaker for stable ordering).
 	const rows = (frm.doc.items || []).slice().sort((a, b) => {
-		if ((a.item_code || "") !== (b.item_code || "")) return (a.item_code || "").localeCompare(b.item_code || "");
+		const da = a.so_date || "9999-12-31", db = b.so_date || "9999-12-31";
+		if (da !== db) return da.localeCompare(db);
+		if ((a.customer || "") !== (b.customer || "")) return (a.customer || "").localeCompare(b.customer || "");
 		if ((a.is_buffer ? 1 : 0) !== (b.is_buffer ? 1 : 0)) return (a.is_buffer ? 1 : 0) - (b.is_buffer ? 1 : 0);
-		return (a.so_date || "9999-12-31").localeCompare(b.so_date || "9999-12-31");
+		return (a.item_code || "").localeCompare(b.item_code || "");
 	});
 
 	const body = rows
@@ -189,6 +212,75 @@ function wps_render_consolidated(frm) {
 			(editable
 				? `<p class="text-muted small">${__("Editing an item's Committed Prodn allocates it to that item's Sales Order lines by Dispatch Priority Date (earliest first); any surplus beyond the requirement becomes a 'Buffer' row.")}</p>`
 				: "")
+	);
+}
+
+// Dispatch view - one row per Customer + Dispatch Priority Date, with every
+// numeric column (Pending / Reserved / Item Free Stock / Suggested / Committed
+// Prodn) summed over that group. Read-only summary (no editing here - adjust
+// Committed in the Detailed or Consolidated view).
+function wps_render_dispatch(frm) {
+	const field = frm.get_field("consolidated_requirement_html");
+	if (!field) return;
+	const hideZero = frm.doc.hide_zero_rows;
+
+	const by = {};
+	const order = [];
+	(frm.doc.items || []).forEach((d) => {
+		const key = (d.customer || "") + " " + (d.so_date || "");
+		if (!(key in by)) {
+			by[key] = { customer: d.customer || "", so_date: d.so_date || "", pending: 0, reserved: 0, free: 0, sug: 0, com: 0, freeSeen: new Set() };
+			order.push(key);
+		}
+		const r = by[key];
+		r.pending += flt(d.pending_qty);
+		r.reserved += flt(d.reserved_qty);
+		// Item Free Stock is a per-ITEM fact repeated on every line of that item, so
+		// it's counted once per distinct item in the group - summing it per line
+		// would multiply one item's free stock by its number of lines.
+		const ic = d.item_code || "";
+		if (!r.freeSeen.has(ic)) {
+			r.freeSeen.add(ic);
+			r.free += flt(d.item_free_stock);
+		}
+		r.sug += flt(d.suggested_prodn);
+		r.com += flt(d.committed_prodn);
+	});
+
+	// Sorted by Dispatch Priority Date, then Customer.
+	order.sort((a, b) => {
+		const ra = by[a], rb = by[b];
+		const da = ra.so_date || "9999-12-31", db = rb.so_date || "9999-12-31";
+		if (da !== db) return da.localeCompare(db);
+		return (ra.customer || "").localeCompare(rb.customer || "");
+	});
+
+	const body = order
+		.filter((k) => !hideZero || by[k].com > 0)
+		.map((k) => {
+			const r = by[k];
+			return (
+				`<tr><td>${wps_esc(r.customer)}</td>` +
+				`<td>${r.so_date ? frappe.datetime.str_to_user(r.so_date) : ""}</td>` +
+				`<td style="text-align:right">${format_number(r.pending)}</td>` +
+				`<td style="text-align:right">${format_number(r.reserved)}</td>` +
+				`<td style="text-align:right">${format_number(r.free)}</td>` +
+				`<td style="text-align:right">${format_number(r.sug)}</td>` +
+				`<td style="text-align:right"><b>${format_number(r.com)}</b></td></tr>`
+			);
+		})
+		.join("");
+	const total = order.reduce((s, k) => s + by[k].com, 0);
+
+	field.$wrapper.html(
+		`<table class="table table-bordered" style="font-size:12px;"><thead><tr>` +
+			`<th>${__("Customer")}</th><th>${__("Dispatch Priority Date")}</th>` +
+			`<th style="text-align:right">${__("Pending")}</th><th style="text-align:right">${__("Reserved")}</th>` +
+			`<th style="text-align:right">${__("Item Free Stock")}</th><th style="text-align:right">${__("Suggested")}</th>` +
+			`<th style="text-align:right">${__("Committed Prodn")}</th></tr></thead>` +
+			`<tbody>${body}</tbody>` +
+			`<tfoot><tr><th colspan="6" style="text-align:right">${__("Total Committed Prodn")}</th>` +
+			`<th style="text-align:right">${format_number(total)}</th></tr></tfoot></table>`
 	);
 }
 

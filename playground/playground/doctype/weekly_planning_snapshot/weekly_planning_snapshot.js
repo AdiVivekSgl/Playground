@@ -57,6 +57,46 @@ frappe.ui.form.on("Weekly Planning Snapshot Item", {
 function wps_render(frm) {
 	if (frm.doc.view_mode === "Consolidated") wps_render_consolidated(frm);
 	else wps_render_detailed(frm);
+	wps_render_metrics(frm);
+}
+
+// Four number cards summarising the whole snapshot (unaffected by Hide Zero Rows -
+// these are totals across every line, buffer rows included).
+function wps_render_metrics(frm) {
+	const field = frm.get_field("metrics_html");
+	if (!field) return;
+
+	let suggested = 0,
+		committed = 0,
+		value = 0;
+	(frm.doc.items || []).forEach((d) => {
+		suggested += flt(d.suggested_prodn);
+		committed += flt(d.committed_prodn);
+		value += flt(d.committed_prodn) * flt(d.valuation_rate);
+	});
+	// Share of Suggested being met by Committed (can exceed 100% when a buffer
+	// surplus is committed beyond the SO requirement).
+	const achievement = suggested > 0 ? (committed / suggested) * 100 : committed > 0 ? 100 : 0;
+
+	const cards = [
+		{ label: __("Suggested Count"), value: format_number(suggested) },
+		{ label: __("Achievement %"), value: format_number(achievement, null, 1) + "%" },
+		{ label: __("Committed Prodn Count"), value: format_number(committed) },
+		{ label: __("Committed Prodn Value"), value: format_currency(value) },
+	];
+
+	field.$wrapper.html(
+		`<div style="display:flex;gap:12px;flex-wrap:wrap;">` +
+			cards
+				.map(
+					(c) =>
+						`<div style="flex:1 1 160px;min-width:140px;border:1px solid var(--border-color,#d1d8dd);border-radius:8px;padding:12px 14px;background:var(--card-bg,var(--fg-color,#fff));">` +
+						`<div class="text-muted small" style="margin-bottom:6px;">${c.label}</div>` +
+						`<div style="font-size:20px;font-weight:600;">${c.value}</div></div>`
+				)
+				.join("") +
+			`</div>`
+	);
 }
 
 function wps_render_detailed(frm) {
@@ -207,6 +247,7 @@ function wps_allocate(frm, item_code, new_total) {
 				is_buffer: 1,
 				suggested_prodn: 0,
 				committed_prodn: flt(surplus),
+				valuation_rate: flt(nm.valuation_rate),
 			});
 		}
 	} else if (buffer) {

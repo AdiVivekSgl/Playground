@@ -331,6 +331,7 @@ def approve_snapshot(filters=None):
 				"item_free_stock": free,
 				"suggested_prodn": suggested,
 				"committed_prodn": suggested,
+				"valuation_rate": flt(stock.get("valuation_rate")),
 			},
 		)
 

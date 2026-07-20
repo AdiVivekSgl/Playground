@@ -78,11 +78,14 @@ function wps_render_metrics(frm) {
 	// surplus is committed beyond the SO requirement).
 	const achievement = suggested > 0 ? (committed / suggested) * 100 : committed > 0 ? 100 : 0;
 
+	// frappe.format (Currency) is used rather than the global format_currency,
+	// which isn't defined on every Frappe build - an undefined-reference there
+	// would throw and silently drop the whole card strip.
 	const cards = [
 		{ label: __("Suggested Count"), value: format_number(suggested) },
-		{ label: __("Achievement %"), value: format_number(achievement, null, 1) + "%" },
+		{ label: __("Achievement %"), value: flt(achievement, 1) + "%" },
 		{ label: __("Committed Prodn Count"), value: format_number(committed) },
-		{ label: __("Committed Prodn Value"), value: format_currency(value) },
+		{ label: __("Committed Prodn Value"), value: frappe.format(value, { fieldtype: "Currency" }) },
 	];
 
 	field.$wrapper.html(

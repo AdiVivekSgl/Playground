@@ -65,10 +65,10 @@
    "fieldname": "view_mode",
    "fieldtype": "Select",
    "label": "View",
-   "options": "Detailed\nConsolidated",
+   "options": "Detailed\nConsolidated\nDispatch",
    "default": "Detailed",
    "allow_on_submit": 1,
-   "description": "Detailed = per Sales Order line. Consolidated = one row per Item Code; editing Committed Prodn there allocates back to the SO lines by Sales Order Date priority. Switching the view never changes data - allowed on submit so the read-only views stay switchable."
+   "description": "Detailed = per Sales Order line (sorted by Dispatch Priority Date, then Customer). Consolidated = one row per Item Code; editing Committed Prodn there allocates back to the SO lines by Dispatch Priority Date. Dispatch = one row per Customer + Dispatch Priority Date with every numeric column summed (read-only). Switching the view never changes data - allowed on submit so the read-only views stay switchable."
   },
   {
    "fieldname": "hide_zero_rows",
@@ -77,6 +77,15 @@
    "default": "0",
    "allow_on_submit": 1,
    "description": "Client-side view filter - hides rows with Committed Prodn = 0 (per line in Detailed, per item in Consolidated). Does not change the data - allowed on submit so it stays usable after approval."
+  },
+  {
+   "fieldname": "metrics_section",
+   "fieldtype": "Section Break",
+   "label": "Summary"
+  },
+  {
+   "fieldname": "metrics_html",
+   "fieldtype": "HTML"
   },
   {
    "fieldname": "items_table_section",
@@ -95,15 +104,6 @@
    "fieldname": "consolidated_requirement_html",
    "fieldtype": "HTML",
    "label": "Items (Consolidated)"
-  },
-  {
-   "fieldname": "metrics_section",
-   "fieldtype": "Section Break",
-   "label": "Summary"
-  },
-  {
-   "fieldname": "metrics_html",
-   "fieldtype": "HTML"
   }
  ],
  "permissions": [

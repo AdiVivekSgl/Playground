@@ -108,6 +108,14 @@
    "in_list_view": 1,
    "columns": 1,
    "description": "The qty production commits to produce for this SO/item line. Prepopulated from Suggested Prodn and editable on the draft; independent of Suggested (never added to it). The Production Plan is built from this."
+  },
+  {
+   "fieldname": "valuation_rate",
+   "fieldtype": "Currency",
+   "label": "Valuation Rate",
+   "read_only": 1,
+   "hidden": 1,
+   "description": "Item stock valuation rate (STOCK_WAREHOUSE) frozen at draft creation - the same basis as the FGSRM Production COGS card. Drives the Committed Prodn Value summary card: Committed Prodn x this rate. Buffer rows copy the item's rate. A frozen fact (copied on amend, like item_free_stock)."
   }
  ],
  "permissions": []

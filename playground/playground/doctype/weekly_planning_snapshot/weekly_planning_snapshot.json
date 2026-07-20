@@ -22,10 +22,6 @@
    "description": "Not unique at the DocType level - validate() only blocks a second SUBMITTED snapshot on the same date, so a cancelled snapshot can be re-approved on that date."
   },
   {
-   "fieldname": "col_break_1",
-   "fieldtype": "Column Break"
-  },
-  {
    "fieldname": "generated_by",
    "fieldtype": "Link",
    "options": "User",
@@ -34,23 +30,27 @@
    "default": "__user"
   },
   {
-   "fieldname": "approved_by",
-   "fieldtype": "Link",
-   "options": "User",
-   "label": "Approved By",
-   "read_only": 1,
-   "description": "Set automatically on submit - approve_snapshot() inserts and submits in one action, so generating and approving are the same step, done by the same person."
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
   },
   {
    "fieldname": "approved_on",
    "fieldtype": "Datetime",
-   "label": "Approved On",
-   "read_only": 1
+   "label": "Planning Done On",
+   "read_only": 1,
+   "description": "Document submission datetime - set on submit (when the weekly planning was approved). Fieldname kept as approved_on (referenced by sales_order_hooks)."
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Submitted By",
+   "read_only": 1,
+   "description": "User who submitted (approved) the snapshot - set automatically on submit. Fieldname kept as approved_by."
   },
   {
    "fieldname": "remarks_section",
-   "fieldtype": "Section Break",
-   "label": "Remarks"
+   "fieldtype": "Section Break"
   },
   {
    "fieldname": "remarks",
@@ -58,9 +58,8 @@
    "label": "Remarks"
   },
   {
-   "fieldname": "items_section",
-   "fieldtype": "Section Break",
-   "label": "Snapshot Items"
+   "fieldname": "items_col_break",
+   "fieldtype": "Column Break"
   },
   {
    "fieldname": "view_mode",
@@ -89,6 +88,15 @@
    "fieldname": "consolidated_requirement_html",
    "fieldtype": "HTML",
    "label": "Items (Consolidated)"
+  },
+  {
+   "fieldname": "metrics_section",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "metrics_html",
+   "fieldtype": "HTML",
+   "label": "Summary"
   }
  ],
  "permissions": [

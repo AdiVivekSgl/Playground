@@ -123,6 +123,463 @@ function fgsrm_show_blocked_dialog(blocked, retry_rows, filters_json) {
 	dialog.show();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard tab
+//
+// Self-contained on purpose. Everything the Dashboard needs - fetch, render and
+// the tab chrome - lives in this one object and talks to the server through a
+// SINGLE whitelisted endpoint that returns a finished payload. It reads report
+// state only through frappe.query_report.get_filter_values() and never touches
+// execute()'s data, so the table view (reservations, Create Prodn Plan) cannot
+// regress. To lift this into a standalone Dashboard page later, swap mount()'s
+// host element and get_filters() for that page's own - nothing else changes.
+// ─────────────────────────────────────────────────────────────────────────────
+const FGSRM_DASHBOARD_METHOD = "playground.playground.fgsrm_dashboard.get_dashboard_metrics";
+
+// Accent per indicator, used for the card's left rule and the list badges.
+// Colour only ever carries emphasis here - every card is also labelled - so this
+// stays readable in both themes and without colour vision.
+const FGSRM_DASH_ACCENT = {
+	green: "#199e70",
+	orange: "#eb8c34",
+	red: "#e03e52",
+	blue: "#2a78d6",
+	grey: "#8d99a6",
+};
+
+const FGSRM_DASH = {
+	active: false,
+	// Sequence number of the newest in-flight metrics request (see refresh).
+	token: 0,
+
+	// ── formatting helpers ────────────────────────────────────────────────
+	money(v, currency) {
+		try {
+			return format_currency(flt(v), currency);
+		} catch (e) {
+			return flt(v).toFixed(2);
+		}
+	},
+
+	qty(v) {
+		const n = flt(v);
+		try {
+			return format_number(n, null, Number.isInteger(n) ? 0 : 2);
+		} catch (e) {
+			return String(n);
+		}
+	},
+
+	esc(v) {
+		return frappe.utils.escape_html(v == null ? "" : String(v));
+	},
+
+	// ── mount / tabs ──────────────────────────────────────────────────────
+	// Idempotent: safe to call on every run. Frappe re-renders the datatable in
+	// place on refresh, so the injected nodes survive, but re-asserting costs
+	// nothing and covers any future teardown.
+	mount(report) {
+		const $main = $(report.page.main);
+		this.inject_styles();
+
+		let $tabs = $main.find(".fgsrm-tabs");
+		let $dash = $main.find(".fgsrm-dash");
+
+		if (!$tabs.length) {
+			$tabs = $(`
+				<div class="fgsrm-tabs">
+					<button class="fgsrm-tab active" data-tab="table">${__("Table")}</button>
+					<button class="fgsrm-tab" data-tab="dashboard">${__("Dashboard")}</button>
+				</div>
+			`);
+			$dash = $('<div class="fgsrm-dash" style="display:none;"></div>');
+			$main.prepend($dash);
+			$main.prepend($tabs);
+
+			$tabs.on("click", ".fgsrm-tab", (e) => {
+				this.activate($(e.currentTarget).data("tab"));
+			});
+
+			this.bind_actions($dash);
+		}
+
+		// Settle directly above the report body, i.e. BELOW the filter row (the
+		// filters drive both tabs, so they belong above the tab strip).
+		// .report-wrapper doesn't exist yet at onload, so the first mount leaves
+		// the tabs at the top of the page and the first run slides them into
+		// place. Self-correcting and idempotent - safe to call on every run.
+		const $anchor = $main.find(".report-wrapper").first();
+		if ($anchor.length && $dash.next()[0] !== $anchor[0]) {
+			$tabs.insertBefore($anchor);
+			$dash.insertBefore($anchor);
+		}
+	},
+
+	activate(tab) {
+		const $main = $(frappe.query_report.page.main);
+		const dashboard = tab === "dashboard";
+		this.active = dashboard;
+
+		$main.find(".fgsrm-tab").removeClass("active");
+		$main.find(`.fgsrm-tab[data-tab="${tab}"]`).addClass("active");
+
+		if (dashboard) {
+			this.hide_report_ui($main);
+		} else {
+			this.show_report_ui($main);
+		}
+		$main.find(".fgsrm-dash").toggle(dashboard);
+
+		if (dashboard) {
+			this.refresh();
+		} else {
+			// The DataTable sizes its columns at render time. If the report ran
+			// while it was hidden, its widths can be stale - a resize event makes
+			// it re-measure WITHOUT re-rendering, so in-progress Reserve Qty edits
+			// and row selections survive the tab switch.
+			window.dispatchEvent(new Event("resize"));
+		}
+	},
+
+	// The report-owned children the tabs swap between. .page-form is EXCLUDED
+	// deliberately - that's the filter row, which drives both tabs and must stay
+	// on screen; hiding it would strand the user on a dashboard they can't
+	// re-filter.
+	report_children($main) {
+		return $main.children().not(".fgsrm-tabs").not(".fgsrm-dash").not(".page-form");
+	},
+
+	// Hide the report's own UI (summary, chart, message, datatable) without
+	// naming their selectors, so this survives Frappe renaming them.
+	//
+	// Frappe keeps .report-summary / .chart-wrapper / the message div hidden
+	// unless they have content, so we can't just show() everything on the way
+	// back - that would reveal empty containers the report meant to keep hidden.
+	// Instead we remember each element's report-owned visibility. Any element
+	// seen VISIBLE is recorded as such (that's the report's intent, including
+	// when a re-run newly populates one); an already-hidden element keeps its
+	// first recorded state, so our own hiding never gets mistaken for the
+	// report's.
+	hide_report_ui($main) {
+		this.report_children($main)
+			.each(function () {
+				const $el = $(this);
+				if ($el.css("display") !== "none") {
+					$el.data("fgsrmOwnDisplay", "shown");
+				} else if ($el.data("fgsrmOwnDisplay") === undefined) {
+					$el.data("fgsrmOwnDisplay", "hidden");
+				}
+				$el.hide();
+			});
+	},
+
+	show_report_ui($main) {
+		this.report_children($main)
+			.each(function () {
+				const $el = $(this);
+				const own = $el.data("fgsrmOwnDisplay");
+				$el.removeData("fgsrmOwnDisplay");
+				// Unrecorded means it appeared while we were on the dashboard —
+				// show it, since the report only creates what it intends to use.
+				if (own !== "hidden") $el.show();
+			});
+	},
+
+	// ── data ──────────────────────────────────────────────────────────────
+	refresh() {
+		if (!this.active) return;
+		const $dash = $(frappe.query_report.page.main).find(".fgsrm-dash");
+		if (!$dash.length) return;
+
+		// Changing a filter can start a second fetch before the first returns.
+		// Only the newest request is allowed to paint, so a slow earlier response
+		// can't land on top of fresher numbers.
+		const token = (this.token = (this.token || 0) + 1);
+
+		$dash.html(`<div class="fgsrm-dash-msg">${__("Loading dashboard…")}</div>`);
+
+		frappe.call({
+			method: FGSRM_DASHBOARD_METHOD,
+			args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
+			callback: (r) => {
+				if (token !== this.token || !this.active) return;
+				if (!r.message) {
+					$dash.html(`<div class="fgsrm-dash-msg">${__("No data for these filters.")}</div>`);
+					return;
+				}
+				$dash.html(this.render(r.message));
+			},
+			error: () => {
+				if (token !== this.token || !this.active) return;
+				$dash.html(`<div class="fgsrm-dash-msg">${__("Could not load the dashboard.")}</div>`);
+			},
+		});
+	},
+
+	// ── click-through ─────────────────────────────────────────────────────
+	// A number should never be a dead end: cards and list rows push the user back
+	// into the table, pre-filtered to exactly the set they just clicked.
+	bind_actions($dash) {
+		$dash.on("click", "[data-view-mode]", (e) => {
+			frappe.query_report.set_filter_value("view_mode", $(e.currentTarget).data("view-mode") || "");
+			this.activate("table");
+		});
+
+		$dash.on("click", "[data-filter-item]", (e) => {
+			frappe.query_report.set_filter_value("item_code", $(e.currentTarget).data("filter-item"));
+			this.activate("table");
+		});
+
+		$dash.on("click", "[data-filter-so]", (e) => {
+			frappe.query_report.set_filter_value("sales_order", $(e.currentTarget).data("filter-so"));
+			this.activate("table");
+		});
+
+		// The SO number itself opens the document, rather than filtering.
+		$dash.on("click", ".fgsrm-so-link", (e) => {
+			e.stopPropagation();
+			frappe.set_route("Form", "Sales Order", $(e.currentTarget).data("so"));
+		});
+	},
+
+	// ── render ────────────────────────────────────────────────────────────
+	render(d) {
+		return [
+			this.render_cards(d),
+			this.render_ageing(d),
+			`<div class="fgsrm-dash-lists">
+				${this.render_blocking(d)}
+				${this.render_overdue(d)}
+			</div>`,
+			`<div class="fgsrm-dash-foot">${__("As on {0} · Overdue measured against Date Basis: {1}", [
+				this.esc(d.as_on),
+				this.esc(d.date_basis),
+			])}</div>`,
+		].join("");
+	},
+
+	render_cards(d) {
+		const cards = (d.cards || [])
+			.map((c) => {
+				const accent = FGSRM_DASH_ACCENT[c.indicator] || FGSRM_DASH_ACCENT.grey;
+				const clickable = c.action && c.action.type === "view";
+				const attrs = clickable
+					? `data-view-mode="${this.esc(c.action.view_mode)}" role="button" tabindex="0"`
+					: "";
+
+				const meta = [];
+				if (c.qty != null) meta.push(`${this.qty(c.qty)} ${__("qty")}`);
+				if (c.count != null) meta.push(__("{0} SO", [c.count]));
+				const secondary = c.secondary
+					? `<div class="fgsrm-card-sec">${this.esc(c.secondary.label)}: ${this.money(
+							c.secondary.value,
+							d.currency
+					  )}</div>`
+					: "";
+
+				return `
+					<div class="fgsrm-card${clickable ? " is-clickable" : ""}"
+						style="border-left-color:${accent};"
+						title="${this.esc(c.hint)}" ${attrs}>
+						<div class="fgsrm-card-label">${this.esc(c.label)}</div>
+						<div class="fgsrm-card-value">${this.money(c.value, d.currency)}</div>
+						<div class="fgsrm-card-meta">${meta.join(" · ")}</div>
+						${secondary}
+					</div>`;
+			})
+			.join("");
+
+		return `<div class="fgsrm-cards">${cards}</div>`;
+	},
+
+	render_ageing(d) {
+		const buckets = d.ageing || [];
+		const total = buckets.reduce((sum, b) => sum + flt(b.value), 0);
+		if (!total) return "";
+
+		const segments = buckets
+			.filter((b) => flt(b.value) > 0)
+			.map((b) => {
+				const pct = (flt(b.value) / total) * 100;
+				const accent = FGSRM_DASH_ACCENT[b.indicator] || FGSRM_DASH_ACCENT.grey;
+				return `<div class="fgsrm-seg" style="width:${pct}%;background:${accent};"
+					title="${this.esc(b.label)}: ${this.money(b.value, d.currency)} (${pct.toFixed(1)}%)"></div>`;
+			})
+			.join("");
+
+		const legend = buckets
+			.map((b) => {
+				const accent = FGSRM_DASH_ACCENT[b.indicator] || FGSRM_DASH_ACCENT.grey;
+				return `<span class="fgsrm-legend-item">
+					<span class="fgsrm-dot" style="background:${accent};"></span>
+					${this.esc(b.label)} — <strong>${this.money(b.value, d.currency)}</strong>
+					<span class="fgsrm-muted">(${b.count})</span>
+				</span>`;
+			})
+			.join("");
+
+		return `
+			<div class="fgsrm-panel">
+				<div class="fgsrm-panel-title">${__("Order Book by Dispatch Window")}</div>
+				<div class="fgsrm-bar">${segments}</div>
+				<div class="fgsrm-legend">${legend}</div>
+			</div>`;
+	},
+
+	render_blocking(d) {
+		const rows = d.blocking_items || [];
+		const total = (d.counts || {}).blocking_items_total || 0;
+
+		const body = rows.length
+			? rows
+					.map(
+						(r) => `
+				<tr data-filter-item="${this.esc(r.item_code)}">
+					<td>
+						<div class="fgsrm-strong">${this.esc(r.item_name || r.item_code)}</div>
+						<div class="fgsrm-muted">${this.esc(r.item_code)}</div>
+					</td>
+					<td class="fgsrm-center"><span class="fgsrm-badge fgsrm-badge-red">${r.blocked_sos}</span></td>
+					<td class="fgsrm-right">${this.qty(r.short_qty)}</td>
+					<td class="fgsrm-right">${this.qty(r.free_stock)}</td>
+					<td class="fgsrm-right fgsrm-strong">${this.qty(r.to_produce)}</td>
+					<td class="fgsrm-right">${this.money(r.value_at_risk, d.currency)}</td>
+				</tr>`
+					)
+					.join("")
+			: `<tr><td colspan="6" class="fgsrm-empty">${__("Nothing is blocking dispatch — no item needs production.")}</td></tr>`;
+
+		return `
+			<div class="fgsrm-panel">
+				<div class="fgsrm-panel-title">
+					${__("Top Blocking Items")}
+					<span class="fgsrm-muted">${__("holding up dispatch · showing {0} of {1}", [rows.length, total])}</span>
+				</div>
+				<table class="fgsrm-table">
+					<thead>
+						<tr>
+							<th>${__("Item")}</th>
+							<th class="fgsrm-center">${__("SOs Blocked")}</th>
+							<th class="fgsrm-right">${__("Short Qty")}</th>
+							<th class="fgsrm-right">${__("Free Stock")}</th>
+							<th class="fgsrm-right">${__("To Produce")}</th>
+							<th class="fgsrm-right">${__("Value at Risk")}</th>
+						</tr>
+					</thead>
+					<tbody>${body}</tbody>
+				</table>
+			</div>`;
+	},
+
+	render_overdue(d) {
+		const rows = d.overdue_sos || [];
+		const total = (d.counts || {}).overdue_sos_total || 0;
+
+		const bucket_label = {
+			ready: [__("Ready"), "green"],
+			cover: [__("Reserve now"), "orange"],
+			produce: [__("Needs production"), "red"],
+		};
+
+		const body = rows.length
+			? rows
+					.map((r) => {
+						const [label, tone] = bucket_label[r.bucket] || [r.bucket, "grey"];
+						return `
+				<tr data-filter-so="${this.esc(r.sales_order)}">
+					<td>
+						<div class="fgsrm-strong fgsrm-so-link" data-so="${this.esc(r.sales_order)}">${this.esc(r.sales_order)}</div>
+						<div class="fgsrm-muted">${this.esc(r.customer_name)}</div>
+					</td>
+					<td class="fgsrm-center"><span class="fgsrm-badge fgsrm-badge-red">${r.days_overdue}</span></td>
+					<td><span class="fgsrm-badge fgsrm-badge-${tone}">${this.esc(label)}</span></td>
+					<td>${this.esc(r.material_status || "")}</td>
+					<td class="fgsrm-right">${this.qty(r.pending_qty)}</td>
+					<td class="fgsrm-right fgsrm-strong">${this.money(r.pending_value, d.currency)}</td>
+				</tr>`;
+					})
+					.join("")
+			: `<tr><td colspan="6" class="fgsrm-empty">${__("Nothing overdue on this Date Basis.")}</td></tr>`;
+
+		return `
+			<div class="fgsrm-panel">
+				<div class="fgsrm-panel-title">
+					${__("Overdue Sales Orders")}
+					<span class="fgsrm-muted">${__("showing {0} of {1}", [rows.length, total])}</span>
+				</div>
+				<table class="fgsrm-table">
+					<thead>
+						<tr>
+							<th>${__("Sales Order")}</th>
+							<th class="fgsrm-center">${__("Days")}</th>
+							<th>${__("State")}</th>
+							<th>${__("Material Status")}</th>
+							<th class="fgsrm-right">${__("Pending Qty")}</th>
+							<th class="fgsrm-right">${__("Pending Value")}</th>
+						</tr>
+					</thead>
+					<tbody>${body}</tbody>
+				</table>
+			</div>`;
+	},
+
+	// Injected once. Everything is driven by Frappe's CSS variables so the
+	// dashboard follows the active (light or dark) theme rather than assuming one.
+	inject_styles() {
+		if (document.getElementById("fgsrm-dash-styles")) return;
+		const style = document.createElement("style");
+		style.id = "fgsrm-dash-styles";
+		style.textContent = `
+			.fgsrm-tabs { display:flex; gap:4px; margin:0 0 12px; border-bottom:1px solid var(--border-color,#d1d8dd); }
+			.fgsrm-tab { background:none; border:none; border-bottom:2px solid transparent; padding:8px 16px;
+				font-size:13px; font-weight:600; color:var(--text-muted,#8d99a6); cursor:pointer; }
+			.fgsrm-tab:hover { color:var(--text-color,#1f272e); }
+			.fgsrm-tab.active { color:var(--text-color,#1f272e); border-bottom-color:var(--primary,#2a78d6); }
+			.fgsrm-dash-msg { padding:32px; text-align:center; color:var(--text-muted,#8d99a6); font-size:13px; }
+			.fgsrm-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; margin-bottom:16px; }
+			.fgsrm-card { background:var(--card-bg,var(--fg-color,#fff)); border:1px solid var(--border-color,#d1d8dd);
+				border-left-width:3px; border-radius:6px; padding:12px 14px; }
+			.fgsrm-card.is-clickable { cursor:pointer; }
+			.fgsrm-card.is-clickable:hover { border-color:var(--primary,#2a78d6); }
+			.fgsrm-card-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.3px;
+				color:var(--text-muted,#8d99a6); margin-bottom:6px; }
+			.fgsrm-card-value { font-size:19px; font-weight:700; color:var(--heading-color,var(--text-color,#1f272e));
+				line-height:1.25; overflow-wrap:anywhere; }
+			.fgsrm-card-meta, .fgsrm-card-sec { font-size:11px; color:var(--text-muted,#8d99a6); margin-top:4px; }
+			.fgsrm-panel { background:var(--card-bg,var(--fg-color,#fff)); border:1px solid var(--border-color,#d1d8dd);
+				border-radius:6px; padding:12px 14px; margin-bottom:16px; }
+			.fgsrm-panel-title { font-size:13px; font-weight:600; color:var(--heading-color,var(--text-color,#1f272e));
+				margin-bottom:10px; display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+			.fgsrm-bar { display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--control-bg,#f4f5f6); }
+			.fgsrm-seg { height:100%; }
+			.fgsrm-legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-size:12px; }
+			.fgsrm-legend-item { display:inline-flex; align-items:center; gap:5px; }
+			.fgsrm-dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+			.fgsrm-dash-lists { display:grid; grid-template-columns:repeat(auto-fit,minmax(430px,1fr)); gap:16px; }
+			.fgsrm-table { width:100%; border-collapse:collapse; font-size:12px; }
+			.fgsrm-table th { text-align:left; font-weight:600; color:var(--text-muted,#8d99a6);
+				border-bottom:1px solid var(--border-color,#d1d8dd); padding:6px 8px; white-space:nowrap; }
+			.fgsrm-table td { padding:7px 8px; border-bottom:1px solid var(--border-color,#ebeef0);
+				color:var(--text-color,#1f272e); vertical-align:top; }
+			.fgsrm-table tbody tr[data-filter-item], .fgsrm-table tbody tr[data-filter-so] { cursor:pointer; }
+			.fgsrm-table tbody tr:hover { background:var(--control-bg,#f4f5f6); }
+			.fgsrm-right { text-align:right; } .fgsrm-center { text-align:center; }
+			.fgsrm-strong { font-weight:600; }
+			.fgsrm-so-link { cursor:pointer; color:var(--primary,#2a78d6); }
+			.fgsrm-so-link:hover { text-decoration:underline; }
+			.fgsrm-muted { color:var(--text-muted,#8d99a6); font-weight:400; font-size:11px; }
+			.fgsrm-empty { text-align:center; color:var(--text-muted,#8d99a6); padding:18px; }
+			.fgsrm-badge { display:inline-block; padding:1px 7px; border-radius:9px; font-size:11px; font-weight:600; }
+			.fgsrm-badge-red { background:#fde2e7; color:#a01c33; }
+			.fgsrm-badge-orange { background:#fff3e0; color:#8a5200; }
+			.fgsrm-badge-green { background:#e1f5ee; color:#0f6b4d; }
+			.fgsrm-badge-grey { background:#eceff1; color:#4a5560; }
+			.fgsrm-dash-foot { font-size:11px; color:var(--text-muted,#8d99a6); padding-bottom:12px; }
+		`;
+		document.head.appendChild(style);
+	},
+};
+
 frappe.query_reports["FG Stock Reservation Manager"] = {
 	filters: [
 		{ fieldname: "item_code", label: __("FG Item"), fieldtype: "Link", options: "Item" },
@@ -227,6 +684,18 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		return formatted;
 	},
 
+	// Keep the tab chrome present after every run, and - when the Dashboard tab
+	// is the one on screen - re-pull its metrics so a filter change updates the
+	// cards, not just the table.
+	after_datatable_render() {
+		FGSRM_DASH.mount(frappe.query_report);
+		if (FGSRM_DASH.active) {
+			// Re-assert visibility: the datatable Frappe just rendered would
+			// otherwise reappear underneath the dashboard.
+			FGSRM_DASH.activate("dashboard");
+		}
+	},
+
 	// Make Reserve Qty editable (capped at Reservable Now); make Dispatch
 	// Priority Date editable only when Date Basis = "Custom Updated Delivery
 	// Date" (editing Document Creation Date / Delivery Date wouldn't make
@@ -299,6 +768,11 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 	},
 
 	onload(report) {
+		// ── Table / Dashboard tabs (see FGSRM_DASH above) ───────────────────
+		// Mounted here so the tabs exist before the first run; the report opens
+		// on Table, exactly as it did before this was added.
+		FGSRM_DASH.mount(report);
+
 		// ── Run the JIT Production Planning Report for this same filtered view ──
 		report.page.add_inner_button(
 			__("Run JIT Production Planning Report"),

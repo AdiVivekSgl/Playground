@@ -539,6 +539,12 @@ def get_open_so_items(filters):
 			-- base_rate = line rate in COMPANY currency, so the Pending Net
 			-- Total card is in company currency and never mixes currencies.
 			soi.base_rate AS rate,
+			-- base_net_rate = the same line rate EXCLUDING taxes (when the tax
+			-- table is inclusive, base_rate carries the tax and base_net_rate
+			-- doesn't; when taxes are added on top the two are equal). The FGSRM
+			-- dashboard values order book / risk in ex-tax sale value, so it uses
+			-- this. Additive - existing callers only reference `rate`.
+			soi.base_net_rate AS net_rate,
 			(soi.qty - soi.delivered_qty) AS pending_qty,
 			-- qty/delivered_qty (not just the netted pending_qty) so callers can
 			-- distinguish fully vs partially dispatched - additive, existing

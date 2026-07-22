@@ -48,7 +48,7 @@ technically "open"):
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
 	STOCK_WAREHOUSE,
@@ -60,6 +60,13 @@ from playground.playground.report.production_requirement_report.production_requi
 from playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager import (
 	get_line_reserved_map,
 )
+from playground.playground.fgsrm_manual_requirement import list_manual_requirements
+
+# Synthetic sales_order_item prefix for a Projected (manual) snapshot line - it
+# has no real Sales Order Item behind it. Kept unique + traceable so the Snapshot
+# Review diff (keyed by sales_order_item) neither collapses several projected
+# rows together nor mistakes one for a Sales Order line.
+MANUAL_SO_ITEM_PREFIX = "MANUAL-"
 
 
 def execute(filters=None):
@@ -103,6 +110,10 @@ def execute(filters=None):
 				delta = raw_delta
 		elif f and not b:
 			bucket = _("New")
+		elif str(key).startswith(MANUAL_SO_ITEM_PREFIX):
+			# A Projected line from a prior snapshot: it is never in the fresh
+			# open-SO pull, so don't diff it as "Closed".
+			bucket = _("Projected")
 		else:
 			bucket = _("Closed")
 
@@ -203,6 +214,14 @@ def compute_line_statuses(so_item_names):
 	if not so_item_names:
 		return {}
 
+	# Projected (manual) lines carry a synthetic MANUAL-<name> key and have no
+	# Sales Order Item - label them Projected and keep them out of the SO lookups
+	# below (which would otherwise report them as "Removed from SO").
+	statuses = {n: _("Projected") for n in so_item_names if str(n).startswith(MANUAL_SO_ITEM_PREFIX)}
+	so_item_names = [n for n in so_item_names if not str(n).startswith(MANUAL_SO_ITEM_PREFIX)]
+	if not so_item_names:
+		return statuses
+
 	so_item_rows = frappe.get_all(
 		"Sales Order Item",
 		filters={"name": ["in", so_item_names]},
@@ -242,7 +261,7 @@ def compute_line_statuses(so_item_names):
 		)
 		se_confirmed = {r.work_order for r in se_rows}
 
-	statuses = {}
+	# statuses already seeded with the Projected lines above; fill the SO lines.
 	for name in so_item_names:
 		soi = found.get(name)
 		if not soi:
@@ -283,27 +302,37 @@ def compute_line_statuses(so_item_names):
 
 
 @frappe.whitelist()
-def approve_snapshot(filters=None):
+def approve_snapshot(filters=None, include_manual=0):
 	"""Freeze the current open-SO demand into a new Weekly Planning Snapshot as a
 	DRAFT (not submitted). The caller routes to the form so it can be reviewed -
 	Committed Prodn adjusted line-wise - and then SUBMITTED (= approved). Item
 	Free Stock is frozen on the SALES-ORDER-only reservation basis; Suggested
 	Prodn is computed (FGSRM logic) and Committed Prodn prepopulated to match.
-	Recomputes from `filters` server-side rather than trusting client-sent rows."""
+	Recomputes from `filters` server-side rather than trusting client-sent rows.
+
+	When `include_manual` is set, the caller's own FGSRM manual requirements
+	(under the same filters) are folded in as extra "Projected" lines - see
+	_append_projected_rows. Off by default, so the snapshot stays pure open-SO
+	demand unless the planner opts in."""
 	filters = frappe.parse_json(filters) if filters else {}
+	include_manual = cint(include_manual)
 
 	if not frappe.has_permission("Weekly Planning Snapshot", "create"):
 		frappe.throw(_("Not permitted to create a Weekly Planning Snapshot."), frappe.PermissionError)
 
 	so_items = get_open_so_items(filters)
-	if not so_items:
-		frappe.throw(_("No open Sales Order lines to snapshot."))
+	manual_reqs = list_manual_requirements(filters) if include_manual else []
+	if not so_items and not manual_reqs:
+		frappe.throw(_("Nothing to snapshot for this view."))
 
 	reserved_map = get_line_reserved_map([r.so_item for r in so_items])
 	fg_items = sorted({r.item_code for r in so_items})
-	item_map = get_item_map(fg_items)
-	stock_map = get_stock_map(fg_items)
-	so_reserved_map = _so_reserved_map(fg_items)
+	# Stock / reservation / name maps span both SO items and any manual-only item,
+	# so a Projected line can be valued and named just like a Sales Order line.
+	all_items = sorted(set(fg_items) | {r["item_code"] for r in manual_reqs})
+	item_map = get_item_map(all_items)
+	stock_map = get_stock_map(all_items)
+	so_reserved_map = _so_reserved_map(all_items)
 	dispatch_date_map = _dispatch_date_map({r.sales_order for r in so_items})
 
 	snap = frappe.new_doc("Weekly Planning Snapshot")
@@ -335,8 +364,49 @@ def approve_snapshot(filters=None):
 			},
 		)
 
+	_append_projected_rows(snap, manual_reqs, item_map, stock_map, so_reserved_map)
+
 	snap.insert()
 	return snap.name
+
+
+def _append_projected_rows(snap, manual_reqs, item_map, stock_map, so_reserved_map):
+	"""Fold the caller's FGSRM manual requirements into the snapshot as Projected
+	lines. Each becomes an ordinary snapshot line, but:
+	  - customer reads "<Customer> - Projected" (or just "Projected" when the
+	    requirement carries no customer), so speculative demand is unmistakable;
+	  - reserved_qty is 0 (nothing is reserved against a projection) and it nets
+	    against the item's frozen free stock exactly like a Sales Order line, so
+	    Suggested Prodn is comparable;
+	  - sales_order is blank and sales_order_item is a synthetic MANUAL-<name>
+	    key (see MANUAL_SO_ITEM_PREFIX).
+	The doctype's validate() recomputes Suggested from these same inputs, so the
+	values set here and the stored ones agree."""
+	for req in manual_reqs:
+		item = req["item_code"]
+		stock = stock_map.get(item) or frappe._dict()
+		qty = flt(req["qty"])
+		free = flt(stock.get("actual_qty")) - flt(so_reserved_map.get(item, 0.0))
+		suggested = max(0.0, qty - free)
+		customer = req.get("customer")
+		projected = _("{0} - Projected").format(customer) if customer else _("Projected")
+		snap.append(
+			"items",
+			{
+				"sales_order": None,
+				"sales_order_item": "{0}{1}".format(MANUAL_SO_ITEM_PREFIX, req["name"]),
+				"item_code": item,
+				"item_name": req.get("item_name") or (item_map.get(item) or {}).get("item_name"),
+				"customer": projected,
+				"so_date": None,
+				"pending_qty": qty,
+				"reserved_qty": 0.0,
+				"item_free_stock": free,
+				"suggested_prodn": suggested,
+				"committed_prodn": suggested,
+				"valuation_rate": flt(stock.get("valuation_rate")),
+			},
+		)
 
 
 def _dispatch_date_map(sales_orders):

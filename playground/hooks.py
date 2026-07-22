@@ -17,6 +17,8 @@ doctype_js = {
 # action (see playground/public/js/purchase_order_list.js).
 doctype_list_js = {
 	"Purchase Order": "public/js/purchase_order_list.js",
+	# Renders the manual "Sales Status" custom field as coloured indicator pills.
+	"Sales Order": "public/js/sales_order_list.js",
 }
 
 # Purchase Invoice controller override: Price Adjustment Debit Note GRNI
@@ -46,6 +48,7 @@ fixtures = [
 				"in",
 				[
 					"custom_material_status",
+					"custom_sales_status",
 					"custom_inspection_completed",
 					"delivery_date_revision_count",
 				],

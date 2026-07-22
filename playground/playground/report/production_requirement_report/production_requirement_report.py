@@ -496,6 +496,62 @@ def compute_so_qualification_flags(so_items, line_reserved, item_free_stock_map)
 	return so_ok
 
 
+def compute_priority_availability(so_items, reserved_map, item_free_stock_map, so_sort_date):
+	"""Per Sales Order: True iff, after every EARLIER-priority SO competing for the
+	same FG item has taken its share of that item's free stock, this SO's demand on
+	*every* item is still fully covered. This is the FIFO-by-dispatch-date waterfall
+	`_compute_plan_rows` runs for the Production Plan, surfaced as a per-SO boolean
+	so Sales Order.custom_material_status can distinguish:
+
+	  Available        -> this returns True  (covered at the SO's own priority)
+	  Possible to Push -> coverable in isolation but this returns False (an
+	                      earlier-dated SO is consuming the shared free stock)
+
+	demand(so, item) = max(0, pending - reserved). `so_sort_date` is
+	{sales_order: dispatch-priority date or None}; earlier dates allocate first,
+	missing dates sort last. Free stock uses the caller's basis (Material Status
+	passes the All-Reservations map). An SO with no positive demand is vacuously
+	available (True).
+
+	Kept as a parallel helper (not a refactor of _compute_plan_rows) so the
+	Production Plan builder stays untouched; both encode the identical waterfall.
+	"""
+	pending_by = {}
+	items = set()
+	sos = []
+	seen = set()
+	for r in so_items:
+		key = (r.sales_order, r.item_code)
+		pending_by[key] = pending_by.get(key, 0.0) + flt(r.pending_qty)
+		items.add(r.item_code)
+		if r.sales_order not in seen:
+			seen.add(r.sales_order)
+			sos.append(r.sales_order)
+
+	def _key(so):
+		d = so_sort_date.get(so)
+		return getdate(d) if d else date.max
+
+	available = {so: True for so in sos}
+	for item in items:
+		competing = [
+			so
+			for so in sos
+			if flt(pending_by.get((so, item), 0.0)) - flt(reserved_map.get((so, item), 0.0)) > 0
+		]
+		competing.sort(key=_key)
+		remaining = flt(item_free_stock_map.get(item, 0.0))
+		if remaining < 0:
+			remaining = 0.0
+		for so in competing:
+			demand = flt(pending_by.get((so, item), 0.0)) - flt(reserved_map.get((so, item), 0.0))
+			cover = min(demand, remaining) if remaining > 0 else 0.0
+			remaining -= cover
+			if demand - cover > 0.0001:
+				available[so] = False
+	return available
+
+
 def get_open_so_items(filters):
 	conditions = ""
 	values = {"statuses": OPEN_SO_STATUSES}
@@ -509,6 +565,13 @@ def get_open_so_items(filters):
 	if filters.get("item_code"):
 		conditions += " AND soi.item_code = %(item_code)s"
 		values["item_code"] = filters.get("item_code")
+
+	# Multi-item scope: all open lines for a SET of FG items. Used by the Material
+	# Status item-cluster recompute so priority availability sees every SO competing
+	# for those items, not just the one that triggered the recompute.
+	if filters.get("item_codes"):
+		conditions += " AND soi.item_code IN %(item_codes)s"
+		values["item_codes"] = list(filters.get("item_codes"))
 
 	# Scoped single-SO recompute (Material Status) reuses this same query rather
 	# than re-querying the whole open-SO universe for one document.

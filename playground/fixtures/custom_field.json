@@ -33,13 +33,27 @@
   "fieldname": "custom_material_status",
   "label": "Material Status",
   "fieldtype": "Select",
-  "options": "\nReprioritize\nInspected\nReady to Dispatch\nNeeds Attention\nPossible to Push\nPlanning Pending",
+  "options": "\nReserved\nNeeds Attention\nAvailable\nPossible to Push\nReprioritized\nPlanning Pending",
   "insert_after": "status",
   "read_only": 1,
   "in_list_view": 1,
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Computed operational status resolved by a fixed precedence chain (see playground/playground/sales_order_hooks.py). Read-only: set by the hourly scheduler and targeted recompute hooks (reservation submit/cancel, snapshot submit, SO save). Blank means none of the six rules matched."
+  "description": "Computed operational status resolved by a fixed precedence chain (see playground/playground/sales_order_hooks.py): Reserved > Needs Attention > Available > Possible to Push > Reprioritized > Planning Pending. Needs Attention also fires when the updated delivery date slips >21 days past delivery_date. Available/Possible to Push are decided by a FIFO-by-dispatch-date free-stock allocation across competing SOs. Read-only: set by the hourly scheduler and targeted recompute hooks (reservation submit/cancel, snapshot submit, SO save). Blank means none of the six rules matched."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Order-custom_sales_status",
+  "dt": "Sales Order",
+  "fieldname": "custom_sales_status",
+  "label": "Sales Status",
+  "fieldtype": "Select",
+  "options": "\nInspection Awaited\nDI Awaited\nPayment Awaited\nCustomer Delay\nHold\nApproval Issue\nUrgent",
+  "insert_after": "custom_material_status",
+  "in_list_view": 1,
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Manual sales-side status flag (not computed). Rendered as a coloured pill in the Sales Order list view (see playground/public/js/sales_order_list.js). Blank = no flag."
  },
  {
   "doctype": "Custom Field",
@@ -52,7 +66,7 @@
   "insert_after": "custom_material_status",
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Manual tick set once the order has passed inspection. Drives the \"Inspected\" Material Status (rank 2, outranks Ready to Dispatch)."
+  "description": "Manual tick set once the order has passed inspection. No longer drives Material Status (the \"Inspected\" state was removed from the precedence chain); retained for reference and other uses."
  },
  {
   "doctype": "Custom Field",
@@ -66,7 +80,7 @@
   "read_only": 1,
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Counts how many times custom_updated_delivery_date changed via a standard Sales Order form/controller save. Intentionally does NOT count FGSRM's Dispatch Priority Date edits (those use db.set_value and bypass validate). >4 drives \"Needs Attention\" (rank 4)."
+  "description": "Counts how many times custom_updated_delivery_date changed via a standard Sales Order form/controller save. Intentionally does NOT count FGSRM's Dispatch Priority Date edits (those use db.set_value and bypass validate). >4 drives \"Needs Attention\" (rank 2)."
  },
  {
   "doctype": "Custom Field",

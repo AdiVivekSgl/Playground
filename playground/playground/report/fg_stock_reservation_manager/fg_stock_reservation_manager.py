@@ -115,7 +115,7 @@ def execute(filters=None):
 		if view_mode:
 			return get_columns(), []
 		unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
-		return get_columns(), _build_manual_rows(filters, {}, {}, unreserved_basis)
+		return get_columns(), _with_total(_build_manual_rows(filters, {}, {}, unreserved_basis))
 
 	fg_items = sorted(set(r.item_code for r in so_items))
 	sos = sorted(set(r.sales_order for r in so_items))
@@ -132,17 +132,22 @@ def execute(filters=None):
 	# "Date" column shows the SO date chosen by the Date Basis dropdown.
 	so_date_map = _get_so_date_map(sos, filters.get("date_basis"))
 
-	# Computed Material Status per SO (custom_material_status - the stored field
-	# from the Sales Order Material Status feature). Guarded so this still runs on
-	# a site where that field hasn't been installed.
+	# Per-SO status flags: custom_material_status (computed, from the Material
+	# Status feature) and custom_sales_status (a manual sales-side flag). Each
+	# column is fetched only when it exists, so this still runs on a site where
+	# one or both haven't been installed.
 	so_material_status = {}
-	if sos and frappe.db.has_column("Sales Order", "custom_material_status"):
-		so_material_status = {
-			r.name: r.custom_material_status
-			for r in frappe.get_all(
-				"Sales Order", filters={"name": ["in", sos]}, fields=["name", "custom_material_status"]
-			)
-		}
+	so_sales_status = {}
+	if sos:
+		status_fields = ["name"]
+		if frappe.db.has_column("Sales Order", "custom_material_status"):
+			status_fields.append("custom_material_status")
+		if frappe.db.has_column("Sales Order", "custom_sales_status"):
+			status_fields.append("custom_sales_status")
+		if len(status_fields) > 1:
+			for r in frappe.get_all("Sales Order", filters={"name": ["in", sos]}, fields=status_fields):
+				so_material_status[r.name] = r.get("custom_material_status")
+				so_sales_status[r.name] = r.get("custom_sales_status")
 
 	# Item free stock is shared across an item's SO lines; deduct as we walk the
 	# lines (FIFO by delivery date) so "Reservable Qty" doesn't over-promise the
@@ -213,15 +218,22 @@ def execute(filters=None):
 		this_item_free = flt(item_free_stock_map.get(r.item_code, 0.0))
 		suggested_prodn = max(0.0, short_to_complete - this_item_free)
 
+		# Pending Value = pending qty x line rate EXCLUDING tax (base_net_rate,
+		# company currency) - the same ex-tax basis the dashboard uses; falls back
+		# to base_rate on a legacy line where net_rate is unset.
+		rate = flt(r.get("net_rate")) or flt(r.get("rate"))
+
 		data.append(
 			{
 				"item_code": r.item_code,
 				"item_name": details.get("item_name"),
 				"material_status": so_material_status.get(r.sales_order),
+				"sales_status": so_sales_status.get(r.sales_order),
 				"customer": r.customer,
 				"sales_order": r.sales_order,
 				"so_date": so_date_map.get(r.sales_order),
 				"sales_order_item": r.so_item,
+				"pending_value": pending * rate,
 				"pending_qty": pending,
 				"reserved_qty": reserved,
 				"short_to_complete": short_to_complete,
@@ -258,7 +270,7 @@ def execute(filters=None):
 		# Sales Order lines, which a manual row isn't.
 		manual_rows = _build_manual_rows(filters, free_left, item_free_stock_map, unreserved_basis)
 		base = _collapse_by_so(data) if group_by_so else data
-		return get_columns(), base + manual_rows
+		return get_columns(), _with_total(base + manual_rows)
 
 	# Evaluate per-SO qualification across ALL of that SO's lines (only_unreserved
 	# was forced off above, so `data` already holds every line for each SO here).
@@ -282,15 +294,16 @@ def execute(filters=None):
 			so for so, flags in so_ok.items() if flags["coverable"] and not flags["ready"]
 		}
 	filtered = [row for row in data if row["sales_order"] in qualifying_sos]
-	return get_columns(), _collapse_by_so(filtered) if group_by_so else filtered
+	return get_columns(), _with_total(_collapse_by_so(filtered) if group_by_so else filtered)
 
 
 def _collapse_by_so(rows):
 	"""Collapse per-line rows to one summary row per Sales Order for the "Group by
-	Sales Order" toggle: Pending Qty, Reserved Qty and Suggested Prodn are summed
-	across the SO's item lines; the SO-level identity fields (SO, Customer,
-	Dispatch Priority Date) carry through; every item-level column is left blank.
-	SO order is preserved from the incoming (already date-sorted) rows.
+	Sales Order" toggle: Pending Value, Pending Qty, Reserved Qty and Suggested
+	Prodn are summed across the SO's item lines; the SO-level identity fields (SO,
+	Customer, Dispatch Priority Date, Material/Sales Status) carry through; every
+	item-level column is left blank. SO order is preserved from the incoming
+	(already date-sorted) rows.
 
 	This is a read-only summary - a collapsed row has no sales_order_item, so the
 	per-line Create/Cancel/Reserve actions no-op on it (by design)."""
@@ -303,8 +316,10 @@ def _collapse_by_so(rows):
 			agg = {
 				"sales_order": so,
 				"material_status": r.get("material_status"),
+				"sales_status": r.get("sales_status"),
 				"customer": r.get("customer"),
 				"so_date": r.get("so_date"),
+				"pending_value": 0.0,
 				"pending_qty": 0.0,
 				"reserved_qty": 0.0,
 				"suggested_prodn": 0.0,
@@ -314,10 +329,31 @@ def _collapse_by_so(rows):
 			}
 			index[so] = agg
 			out.append(agg)
+		agg["pending_value"] += flt(r.get("pending_value"))
 		agg["pending_qty"] += flt(r.get("pending_qty"))
 		agg["reserved_qty"] += flt(r.get("reserved_qty"))
 		agg["suggested_prodn"] += flt(r.get("suggested_prodn"))
 	return out
+
+
+def _with_total(rows):
+	"""Append a bold grand-total row to a non-empty result set, summing Pending
+	Value, Pending Qty, Reserved Qty and Suggested Prodn over every row shown
+	(Sales Order lines and any manual rows). `is_total` lets the client bold the
+	row and blank the columns that don't sum."""
+	if not rows:
+		return rows
+	total = {
+		"item_name": _("TOTAL"),
+		"is_total": 1,
+		# Its own group, so grouping's repeat-blanking never touches it.
+		"so_group_first": True,
+		"pending_value": sum(flt(r.get("pending_value")) for r in rows),
+		"pending_qty": sum(flt(r.get("pending_qty")) for r in rows),
+		"reserved_qty": sum(flt(r.get("reserved_qty")) for r in rows),
+		"suggested_prodn": sum(flt(r.get("suggested_prodn")) for r in rows),
+	}
+	return rows + [total]
 
 
 def _build_manual_rows(filters, free_left, item_free_stock_map, unreserved_basis):
@@ -373,11 +409,14 @@ def _build_manual_rows(filters, free_left, item_free_stock_map, unreserved_basis
 				"item_code": item,
 				"item_name": r.get("item_name"),
 				"material_status": None,
+				"sales_status": None,
 				"customer": r.get("customer"),
 				"sales_order": None,
 				"source": source_label,
 				"so_date": None,
 				"sales_order_item": None,
+				# No order rate behind a manual requirement, so it carries no value.
+				"pending_value": 0.0,
 				"pending_qty": qty,
 				"reserved_qty": 0.0,
 				"short_to_complete": qty,
@@ -402,17 +441,19 @@ def get_columns():
 	return [
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
 		{"label": _("Material Status"), "fieldname": "material_status", "fieldtype": "Data", "width": 140},
+		# Manual sales-side flag (custom_sales_status) - shown right of Material
+		# Status, colour-coded client-side to match the Sales Order list pills.
+		{"label": _("Sales Status"), "fieldname": "sales_status", "fieldtype": "Data", "width": 140},
 		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link", "options": "Customer", "width": 160},
 		{"label": _("SO"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 130},
-		# Blank for Sales Order rows; for a manually-added requirement it reads
-		# "Manual" or "Blanket Order: <name>" / "Quotation: <name>" - the origin of
-		# the demand. Manual rows are appended at the bottom of the report.
-		{"label": _("Source"), "fieldname": "source", "fieldtype": "Data", "width": 160},
 		# Editable only when Date Basis = "Custom Updated Delivery Date" (see the
 		# client script's get_datatable_options and update_dispatch_priority_date
 		# below) - editing Document Creation Date or Delivery Date wouldn't make
 		# sense, those are factual record-keeping dates, not a priority lever.
 		{"label": _("Dispatch Priority Date"), "fieldname": "so_date", "fieldtype": "Date", "width": 150},
+		# Pending Value = Pending Qty x ex-tax line rate (company currency). Sits
+		# right of Dispatch Priority Date; summed in the TOTAL row.
+		{"label": _("Pending Value"), "fieldname": "pending_value", "fieldtype": "Currency", "width": 130},
 		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Reserved Qty"), "fieldname": "reserved_qty", "fieldtype": "Float", "width": 110},
 		{"label": _("Short to Complete"), "fieldname": "short_to_complete", "fieldtype": "Float", "width": 140},
@@ -429,6 +470,10 @@ def get_columns():
 		# but hidden from view per request.
 		{"label": _("Reservable Qty"), "fieldname": "reservable_now", "fieldtype": "Float", "width": 130, "hidden": 1},
 		{"label": _("To Reserve Qty"), "fieldname": "reserve_qty", "fieldtype": "Float", "width": 130},
+		# Origin of the demand, kept at the far right: blank for Sales Order rows;
+		# "Manual" or "Blanket Order: <name>" / "Quotation: <name>" for a manually
+		# added requirement (those rows are appended at the bottom of the report).
+		{"label": _("Source"), "fieldname": "source", "fieldtype": "Data", "width": 160},
 		{"label": _("FG Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "hidden": 1, "width": 120},
 		{"label": _("SO Item"), "fieldname": "sales_order_item", "fieldtype": "Data", "hidden": 1, "width": 100},
 		{"label": _("Existing SRE"), "fieldname": "existing_sre", "fieldtype": "Data", "hidden": 1, "width": 100},

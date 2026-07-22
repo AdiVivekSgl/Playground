@@ -786,6 +786,12 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		const f = column.fieldname || "";
 		const grouping = cint(frappe.query_report.get_filter_value("group_by_so"));
 
+		// Grand-total row: bold every populated cell and rule it off above.
+		// Short-circuits all the per-column styling below.
+		if (data && data.is_total) {
+			return `<div style="font-weight:700;border-top:2px solid var(--border-color,#b0b8bf);margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
+		}
+
 		if (grouping && data && data.so_group_first === false && (f === "sales_order" || f === "customer" || f === "so_date")) {
 			return "";
 		}
@@ -837,6 +843,24 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 				"Needs Attention": "#fde2e7", // red — problem
 				Reprioritize: "#ede7f6", // purple — far-out, revisit
 				"Planning Pending": "#eceff1", // grey — awaiting planning
+			};
+			const bg = colors[value];
+			if (bg) {
+				return `<div style="background-color:${bg};margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
+			}
+			return formatted;
+		}
+		// Colour-code Sales Status to match the Sales Order list-view pills
+		// (see public/js/sales_order_list.js SALES_STATUS_COLORS).
+		if (f === "sales_status") {
+			const colors = {
+				"Inspection Awaited": "#e0f7fa", // cyan
+				"DI Awaited": "#e3f2fd", // blue
+				"Payment Awaited": "#ede7f6", // purple
+				"Customer Delay": "#fff8e1", // yellow
+				Hold: "#eceff1", // gray
+				"Approval Issue": "#fff3e0", // orange
+				Urgent: "#fde2e7", // red
 			};
 			const bg = colors[value];
 			if (bg) {

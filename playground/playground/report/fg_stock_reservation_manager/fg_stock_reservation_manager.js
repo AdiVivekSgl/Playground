@@ -10,6 +10,10 @@ const FGSRM_METHOD_PATH =
 const FGSRM_MR_EXCEL_METHOD =
 	"playground.playground.production_plan_mr_excel.download_fgsrm_mr_excel";
 
+// Per-user manual requirements (FGSRM Manual Requirement) - free-form or
+// cherry-picked from open Blanket Orders / Quotations. See fgsrm_manual_requirement.py.
+const FGSRM_MR_METHOD_PATH = "playground.playground.fgsrm_manual_requirement";
+
 // Trigger a file download without navigating away. An <a> click (rather than
 // window.open) avoids the pop-up blocker that can swallow a window.open fired
 // from an async callback; the attachment Content-Disposition means the browser
@@ -116,6 +120,150 @@ function fgsrm_show_blocked_dialog(blocked, retry_rows, filters_json) {
 				callback() {
 					dialog.hide();
 					fgsrm_call_create_reservations(retry_rows, filters_json);
+				},
+			});
+		},
+	});
+	dialog.show();
+}
+
+// ── Manual Requirements ──────────────────────────────────────────────────────
+// Add finished-goods demand by hand: free-form (item + qty) or cherry-picked
+// line-by-line from an open Blanket Order / Quotation. Persisted per-user in the
+// FGSRM Manual Requirement doctype (fgsrm_manual_requirement.py); appended at the
+// bottom of the report until removed / cleared. Demand-only - stock is never
+// reserved against a Blanket Order / Quotation - so these rows carry no
+// reservation actions.
+
+// Step 1: choose the source, then branch to free-form or the document picker.
+function fgsrm_add_requirement() {
+	frappe.prompt(
+		[
+			{
+				fieldname: "mode",
+				label: __("Add From"),
+				fieldtype: "Select",
+				options: ["Free-form", "Blanket Order", "Quotation"].join("\n"),
+				default: "Free-form",
+				reqd: 1,
+			},
+		],
+		({ mode }) => (mode === "Free-form" ? fgsrm_add_freeform() : fgsrm_add_from_source(mode)),
+		__("Add Manual Requirement"),
+		__("Next")
+	);
+}
+
+function fgsrm_add_freeform() {
+	frappe.prompt(
+		[
+			{ fieldname: "item_code", label: __("Item"), fieldtype: "Link", options: "Item", reqd: 1 },
+			{ fieldname: "qty", label: __("Qty"), fieldtype: "Float", reqd: 1 },
+			{ fieldname: "customer", label: __("Customer (optional)"), fieldtype: "Link", options: "Customer" },
+			{ fieldname: "remarks", label: __("Remarks (optional)"), fieldtype: "Small Text" },
+		],
+		(v) => {
+			frappe.call({
+				method: `${FGSRM_MR_METHOD_PATH}.add_manual_requirement`,
+				args: {
+					item_code: v.item_code,
+					qty: v.qty,
+					customer: v.customer || null,
+					remarks: v.remarks || null,
+				},
+				freeze: true,
+				freeze_message: __("Adding requirement…"),
+				callback() {
+					frappe.show_alert({ message: __("Requirement added."), indicator: "green" });
+					frappe.query_report.refresh();
+				},
+			});
+		},
+		__("Free-form Requirement"),
+		__("Add")
+	);
+}
+
+// Step 2 (source path): pick the document, fetch its open lines, then let the
+// user tick lines and adjust qty (defaulted to the open qty) before adding.
+function fgsrm_add_from_source(source_type) {
+	frappe.prompt(
+		[{ fieldname: "source_document", label: source_type, fieldtype: "Link", options: source_type, reqd: 1 }],
+		({ source_document }) => {
+			frappe.call({
+				method: `${FGSRM_MR_METHOD_PATH}.get_open_source_lines`,
+				args: { source_type, source_document },
+				freeze: true,
+				freeze_message: __("Fetching open lines…"),
+				callback(r) {
+					const lines = r.message || [];
+					if (!lines.length) {
+						frappe.msgprint(__("No open lines on {0} {1}.", [source_type, source_document]));
+						return;
+					}
+					fgsrm_pick_source_lines(source_type, source_document, lines);
+				},
+			});
+		},
+		__("Pick {0}", [source_type]),
+		__("Next")
+	);
+}
+
+function fgsrm_pick_source_lines(source_type, source_document, lines) {
+	const rows_html = lines
+		.map(
+			(ln, i) => `
+			<tr>
+				<td><input type="checkbox" data-i="${i}" checked /></td>
+				<td>${frappe.utils.escape_html(ln.item_code)}</td>
+				<td>${frappe.utils.escape_html(ln.item_name || "")}</td>
+				<td style="text-align:right">${ln.open_qty}</td>
+				<td><input type="number" class="form-control input-xs" data-qty="${i}" value="${ln.open_qty}" min="0" step="any" style="text-align:right;width:100px;" /></td>
+			</tr>`
+		)
+		.join("");
+
+	const html = `
+		<p>${__("Tick the lines to add and adjust the qty (defaults to the open quantity).")}</p>
+		<table class="table table-bordered" style="font-size:12px;">
+			<thead><tr>
+				<th></th><th>${__("Item")}</th><th>${__("Item Name")}</th>
+				<th style="text-align:right">${__("Open Qty")}</th><th style="text-align:right">${__("Add Qty")}</th>
+			</tr></thead>
+			<tbody>${rows_html}</tbody>
+		</table>`;
+
+	const dialog = new frappe.ui.Dialog({
+		title: __("{0}: {1}", [source_type, source_document]),
+		size: "large",
+		fields: [{ fieldtype: "HTML", options: html }],
+		primary_action_label: __("Add Selected"),
+		primary_action() {
+			const wrap = dialog.$wrapper[0];
+			const picks = [];
+			wrap.querySelectorAll('input[type="checkbox"][data-i]:checked').forEach((cb) => {
+				const i = cb.getAttribute("data-i");
+				const qtyEl = wrap.querySelector(`input[data-qty="${i}"]`);
+				const qty = flt(qtyEl && qtyEl.value);
+				if (qty > 0) {
+					picks.push({ source_item: lines[i].source_item, item_code: lines[i].item_code, qty });
+				}
+			});
+			if (!picks.length) {
+				frappe.msgprint(__("Tick at least one line with a qty greater than zero."));
+				return;
+			}
+			frappe.call({
+				method: `${FGSRM_MR_METHOD_PATH}.add_source_requirements`,
+				args: { source_type, source_document, lines: JSON.stringify(picks) },
+				freeze: true,
+				freeze_message: __("Adding requirements…"),
+				callback(r) {
+					const m = r.message || {};
+					dialog.hide();
+					frappe.show_alert({ message: __("Added {0} requirement(s).", [m.added || 0]), indicator: "green" });
+					frappe.query_report.refresh();
 				},
 			});
 		},
@@ -646,6 +794,21 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			formatted = `<div style="border-top:1px solid var(--border-color, #d1d8dd);margin-top:-1px;padding-top:7px;">${formatted}</div>`;
 		}
 
+		// Manual (speculative) requirement row: tint Source + Item Name indigo and
+		// italicise so it reads as "not Sales Order demand", keep Suggested Prodn's
+		// amber emphasis, and leave every reservation-oriented column plain (a
+		// manual row has no reservations, so the pink Reserved / green Reservable
+		// tints would just be a misleading "0"). Short-circuits the branches below.
+		if (data && data.is_manual) {
+			if (f === "source" || f === "item_name") {
+				return `<div style="background-color:#ede7f6;margin:-8px -12px;padding:8px 12px;font-style:italic;">${formatted}</div>`;
+			}
+			if (f === "suggested_prodn" && flt(data.suggested_prodn) > 0) {
+				return `<div style="background-color:#fff3e0;margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
+			}
+			return formatted;
+		}
+
 		if (f === "reserved_qty") {
 			return `<div style="background-color:#fde2e7;margin:-8px -12px;padding:8px 12px;">${formatted}</div>`;
 		}
@@ -886,6 +1049,57 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			__("Show All"),
 			() => frappe.query_report.set_filter_value("view_mode", ""),
 			__("Views")
+		);
+
+		// ── Manual Requirements: add FG demand by hand (free-form or cherry-picked
+		// from an open Blanket Order / Quotation); persists per-user at the bottom
+		// of the report until removed / cleared. ───────────────────────────────
+		report.page.add_inner_button(__("Add Requirement"), fgsrm_add_requirement, __("Manual Requirements"));
+
+		report.page.add_inner_button(
+			__("Remove Selected"),
+			() => {
+				const names = fgsrm_checked_rows()
+					.filter((r) => r.is_manual && r.manual_name)
+					.map((r) => r.manual_name);
+				if (!names.length) {
+					frappe.msgprint(__("Tick one or more manual requirement rows (Source = Manual / Blanket Order / Quotation) to remove."));
+					return;
+				}
+				frappe.confirm(__("Remove {0} manual requirement(s)?", [names.length]), () => {
+					frappe.call({
+						method: `${FGSRM_MR_METHOD_PATH}.remove_manual_requirements`,
+						args: { names: JSON.stringify(names) },
+						freeze: true,
+						freeze_message: __("Removing…"),
+						callback(r) {
+							const m = r.message || {};
+							frappe.show_alert({ message: __("Removed {0} requirement(s).", [m.removed || 0]), indicator: "blue" });
+							frappe.query_report.refresh();
+						},
+					});
+				});
+			},
+			__("Manual Requirements")
+		);
+
+		report.page.add_inner_button(
+			__("Clear My Requirements"),
+			() => {
+				frappe.confirm(__("Clear ALL your manual requirements? This cannot be undone."), () => {
+					frappe.call({
+						method: `${FGSRM_MR_METHOD_PATH}.clear_manual_requirements`,
+						freeze: true,
+						freeze_message: __("Clearing…"),
+						callback(r) {
+							const m = r.message || {};
+							frappe.show_alert({ message: __("Cleared {0} requirement(s).", [m.removed || 0]), indicator: "blue" });
+							frappe.query_report.refresh();
+						},
+					});
+				});
+			},
+			__("Manual Requirements")
 		);
 
 		// ── Bulk selection by SO / Item (drives both Create and Cancel) ──────

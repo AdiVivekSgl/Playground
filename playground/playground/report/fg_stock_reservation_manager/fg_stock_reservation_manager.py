@@ -65,6 +65,10 @@ from playground.playground.report.production_requirement_report.production_requi
 	_get_so_header_map,
 	_resolve_date_field,
 )
+from playground.playground.fgsrm_manual_requirement import (
+	list_manual_requirements,
+	manual_requirement_qty_by_item,
+)
 
 # --------------------------------------------------------------------------- #
 # Integration with the site's custom Production Plan subsystem (separate app).
@@ -104,7 +108,14 @@ def execute(filters=None):
 
 	so_items = get_open_so_items(filters)
 	if not so_items:
-		return get_columns(), []
+		# No open Sales Order lines in view, but the user may still have manual
+		# requirements for this filter - show those at the bottom as usual rather
+		# than an empty report. A view narrows to SO qualification, which a manual
+		# row has none of, so it stays omitted there.
+		if view_mode:
+			return get_columns(), []
+		unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
+		return get_columns(), _build_manual_rows(filters, {}, {}, unreserved_basis)
 
 	fg_items = sorted(set(r.item_code for r in so_items))
 	sos = sorted(set(r.sales_order for r in so_items))
@@ -239,7 +250,15 @@ def execute(filters=None):
 	group_by_so = cint(filters.get("group_by_so"))
 
 	if not view_mode:
-		return get_columns(), _collapse_by_so(data) if group_by_so else data
+		# Append the current user's manual requirements at the very bottom as
+		# extra demand (see _build_manual_rows). They carry no Sales Order, so the
+		# per-line reserve/cancel actions no-op on them, and each nets only against
+		# the free stock LEFT after every SO line (free_left holds that leftover).
+		# Deliberately excluded from the qualification Views below - those judge
+		# Sales Order lines, which a manual row isn't.
+		manual_rows = _build_manual_rows(filters, free_left, item_free_stock_map, unreserved_basis)
+		base = _collapse_by_so(data) if group_by_so else data
+		return get_columns(), base + manual_rows
 
 	# Evaluate per-SO qualification across ALL of that SO's lines (only_unreserved
 	# was forced off above, so `data` already holds every line for each SO here).
@@ -301,12 +320,94 @@ def _collapse_by_so(rows):
 	return out
 
 
+def _build_manual_rows(filters, free_left, item_free_stock_map, unreserved_basis):
+	"""Rows for the current user's manual requirements (FGSRM Manual Requirement),
+	appended at the bottom of the report. Demand-only: no Sales Order (so the
+	per-line reserve/cancel actions no-op, exactly like a collapsed summary row),
+	reservation columns blank.
+
+	Each requirement nets against the free stock LEFT after every Sales Order line
+	- `free_left` holds that per-item leftover at call time, so committed orders
+	keep first claim. A manual-only item (one with no open SO line) falls back to
+	its full free stock on the current Unreserved Stock Basis. When several manual
+	rows share an item they consume that stock in turn (FIFO by creation, the
+	order list_manual_requirements returns), mirroring how SO lines share item
+	stock - so Item Free Stock / Suggested Prodn stay honest per row."""
+	reqs = list_manual_requirements(filters)
+	if not reqs:
+		return []
+
+	# Working free-stock copy for manual processing. Items shared with a Sales
+	# Order start from the SO leftover; manual-only items from their full free
+	# stock (under "Only Displayed SOs" no displayed reservation nets against
+	# them, since they appear in no displayed SO - so it's just actual_qty).
+	manual_free = {}
+	manual_only = sorted({r["item_code"] for r in reqs if r["item_code"] not in item_free_stock_map})
+	if manual_only:
+		extra_stock = get_stock_map(manual_only)
+		for item in manual_only:
+			stock = extra_stock.get(item) or frappe._dict()
+			reserved_from_stock = (
+				0.0 if unreserved_basis == "Only Displayed SOs" else flt(stock.get("reserved_qty"))
+			)
+			manual_free[item] = flt(stock.get("actual_qty")) - reserved_from_stock
+	for item in {r["item_code"] for r in reqs}:
+		if item in item_free_stock_map:
+			manual_free[item] = flt(free_left.get(item, 0.0))
+
+	rows = []
+	for r in reqs:
+		item = r["item_code"]
+		qty = flt(r["qty"])
+		avail = max(0.0, flt(manual_free.get(item, 0.0)))
+		suggested = max(0.0, qty - avail)
+		manual_free[item] = avail - min(avail, qty)
+
+		source_label = (
+			"{0}: {1}".format(r.get("source_type"), r.get("source_document"))
+			if r.get("source_type") and r.get("source_document")
+			else _("Manual")
+		)
+		rows.append(
+			{
+				"item_code": item,
+				"item_name": r.get("item_name"),
+				"material_status": None,
+				"customer": r.get("customer"),
+				"sales_order": None,
+				"source": source_label,
+				"so_date": None,
+				"sales_order_item": None,
+				"pending_qty": qty,
+				"reserved_qty": 0.0,
+				"short_to_complete": qty,
+				"item_free_stock": avail,
+				"suggested_prodn": suggested,
+				"total_reserved_qty": 0.0,
+				"reserved_by_customer": "",
+				"reservable_now": 0.0,
+				"reserve_qty": 0.0,
+				"existing_sre": "",
+				# Client-side flags: tint the row and drive per-row removal. Each
+				# manual row is its own group so grouping never blanks it.
+				"is_manual": 1,
+				"manual_name": r["name"],
+				"so_group_first": True,
+			}
+		)
+	return rows
+
+
 def get_columns():
 	return [
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
 		{"label": _("Material Status"), "fieldname": "material_status", "fieldtype": "Data", "width": 140},
 		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link", "options": "Customer", "width": 160},
 		{"label": _("SO"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 130},
+		# Blank for Sales Order rows; for a manually-added requirement it reads
+		# "Manual" or "Blanket Order: <name>" / "Quotation: <name>" - the origin of
+		# the demand. Manual rows are appended at the bottom of the report.
+		{"label": _("Source"), "fieldname": "source", "fieldtype": "Data", "width": 160},
 		# Editable only when Date Basis = "Custom Updated Delivery Date" (see the
 		# client script's get_datatable_options and update_dispatch_priority_date
 		# below) - editing Document Creation Date or Delivery Date wouldn't make
@@ -331,6 +432,9 @@ def get_columns():
 		{"label": _("FG Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "hidden": 1, "width": 120},
 		{"label": _("SO Item"), "fieldname": "sales_order_item", "fieldtype": "Data", "hidden": 1, "width": 100},
 		{"label": _("Existing SRE"), "fieldname": "existing_sre", "fieldtype": "Data", "hidden": 1, "width": 100},
+		# The FGSRM Manual Requirement docname for a manual row (blank otherwise) -
+		# carried so the client can remove specific manual rows. Hidden.
+		{"label": _("Manual Req"), "fieldname": "manual_name", "fieldtype": "Data", "hidden": 1, "width": 100},
 	]
 
 
@@ -623,15 +727,25 @@ def _suggested_prodn_by_item(filters):
 	what's on screen. Only the item/customer/date filters apply here (the
 	only_unreserved / view_mode display toggles don't change true open demand).
 
+	The current user's manual requirements (FGSRM Manual Requirement) are folded
+	in as extra demand for the same item-level netting: because it's a single
+	Σ short − free per item, manual qty competes for free stock AFTER real Sales
+	Order demand (committed orders keep first claim), matching the per-row display
+	that _build_manual_rows produces. So Create Prodn Plan reflects manual demand.
+
 	Returns {item_code: qty} for items with a positive requirement."""
 	so_items = get_open_so_items(filters)
-	if not so_items:
+	manual_by_item = manual_requirement_qty_by_item(filters)
+	if not so_items and not manual_by_item:
 		return {}
 
 	fg_items = sorted(set(r.item_code for r in so_items))
 	sos = sorted(set(r.sales_order for r in so_items))
 	line_reserved = get_line_reserved_map([r.so_item for r in so_items])
-	stock_map = get_stock_map(fg_items)
+	# Free stock is needed for every item that carries demand - SO items plus any
+	# manual-only item - so a manual requirement nets against its own stock too.
+	all_items = sorted(set(fg_items) | set(manual_by_item.keys()))
+	stock_map = get_stock_map(all_items)
 
 	unreserved_basis = filters.get("unreserved_basis") or "All Reservations"
 	displayed_reserved = (
@@ -640,7 +754,7 @@ def _suggested_prodn_by_item(filters):
 		else {}
 	)
 	item_free = {}
-	for item in fg_items:
+	for item in all_items:
 		stock = stock_map.get(item) or frappe._dict()
 		if unreserved_basis == "Only Displayed SOs":
 			reserved_from_stock = displayed_reserved.get(item, 0.0) or 0.0
@@ -653,6 +767,8 @@ def _suggested_prodn_by_item(filters):
 		res = line_reserved.get(r.so_item) or frappe._dict()
 		short = max(0.0, flt(r.pending_qty) - flt(res.get("reserved_qty")))
 		short_by_item[r.item_code] = short_by_item.get(r.item_code, 0.0) + short
+	for item, q in manual_by_item.items():
+		short_by_item[item] = short_by_item.get(item, 0.0) + flt(q)
 
 	out = {}
 	for item, short in short_by_item.items():

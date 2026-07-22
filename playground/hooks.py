@@ -25,6 +25,10 @@ doctype_list_js = {
 # overrides Purchase Invoice, merge that logic instead of setting this.
 override_doctype_class = {
 	"Purchase Invoice": "playground.playground.overrides.purchase_invoice.CustomPurchaseInvoice",
+	# TEMPORARY DIAGNOSTIC - logs the GL rows for Delivery Note DC-26-27-014 to
+	# find the zero debit/credit row (see overrides/gl_entry_debug.py). REMOVE
+	# this line + the file when done; no accounting logic is changed.
+	"GL Entry": "playground.playground.overrides.gl_entry_debug.DiagnosticGLEntry",
 }
 
 fixtures = [

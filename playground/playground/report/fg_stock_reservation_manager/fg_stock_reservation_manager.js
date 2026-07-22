@@ -961,12 +961,30 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		report.page.add_inner_button(
 			__("Create Weekly Snapshot (Draft)"),
 			() => {
-				frappe.confirm(
-					__("This freezes the current open Sales Order demand (for this filtered view) into a new DRAFT Weekly Planning Snapshot. Review it (adjust Committed Prodn), then Submit to approve. Continue?"),
-					() => {
+				const d = new frappe.ui.Dialog({
+					title: __("Create Weekly Snapshot (Draft)"),
+					fields: [
+						{
+							fieldtype: "HTML",
+							options: `<p>${__("This freezes the current open Sales Order demand (for this filtered view) into a new DRAFT Weekly Planning Snapshot. Review it (adjust Committed Prodn), then Submit to approve.")}</p>`,
+						},
+						{
+							fieldname: "include_manual",
+							fieldtype: "Check",
+							label: __("Allow manual items into Weekly Snapshot"),
+							default: 0,
+							description: __('Also copy your manual requirements in as Projected demand — each row\'s customer shows as "&lt;Customer&gt; - Projected".'),
+						},
+					],
+					primary_action_label: __("Create Draft"),
+					primary_action(values) {
+						d.hide();
 						frappe.call({
 							method: "playground.playground.report.weekly_planning_snapshot_review.weekly_planning_snapshot_review.approve_snapshot",
-							args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
+							args: {
+								filters: JSON.stringify(frappe.query_report.get_filter_values()),
+								include_manual: values.include_manual ? 1 : 0,
+							},
 							freeze: true,
 							freeze_message: __("Creating draft snapshot…"),
 							callback(r) {
@@ -979,8 +997,9 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 								}
 							},
 						});
-					}
-				);
+					},
+				});
+				d.show();
 			},
 			__("Reports")
 		);

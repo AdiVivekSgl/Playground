@@ -29,9 +29,11 @@ Material Status as "no actionable signal from these six rules".
 Ranks 1 & 4 reuse compute_so_qualification_flags() (`ready` / `coverable`) - the
 exact helper FGSRM's view filters use. Rank 3 reuses compute_priority_availability(),
 the same FIFO-by-dispatch-date waterfall the Production Plan builder runs, so the
-stored field and the live reports can never disagree. Free stock is measured on the
-"All Reservations" basis (actual - Bin.reserved_qty), the conservative,
-filter-independent choice, since this field has no toggle UI.
+stored field and the live reports can never disagree. Free stock uses FGSRM's
+formula but nets out ONLY reservations tied to open Sales Orders (actual -
+reservations_toward_open_SOs in STOCK_WAREHOUSE), NOT Bin.reserved_qty - so a stray
+reservation against a non-open SO can't shrink the pool the open SOs share. This
+matches the reserved side of the allocation, which is also open-SO-only.
 
 Because Available / Possible to Push depend on the WHOLE set of SOs competing for an
 item, a single SO can't be resolved in isolation. Every compute funnels through
@@ -54,6 +56,7 @@ from playground.playground.report.production_requirement_report.production_requi
 	compute_priority_availability,
 	compute_so_qualification_flags,
 	get_open_so_items,
+	get_reserved_in_stock_warehouse_map,
 	get_reserved_map,
 	get_stock_map,
 	_get_so_header_map,
@@ -74,18 +77,30 @@ DELIVERY_DATE_SLIP_DAYS = 21
 
 
 # --------------------------------------------------------------------------- #
-# Free stock (All Reservations basis) - shared by every compute path
+# Free stock (open-SO reservations only) - shared by every compute path
 # --------------------------------------------------------------------------- #
 
-def _item_free_stock_map(item_codes):
-	"""{item_code: actual_qty - Bin.reserved_qty} in STOCK_WAREHOUSE, i.e. the
-	"All Reservations" basis (nets out every reservation, not just displayed
-	SOs). Fixed here because the field has no basis toggle."""
+def _item_free_stock_map(item_codes, sales_orders):
+	"""{item_code: actual_qty - reserved_toward_open_SOs} in STOCK_WAREHOUSE.
+
+	Same free-stock / Suggested-Prodn formula FGSRM uses, but nets out ONLY the
+	reservations tied to the open Sales Orders in `sales_orders`
+	(get_reserved_in_stock_warehouse_map) - i.e. FGSRM's "Only Displayed SOs" basis
+	with the open-SO universe as the displayed set - rather than Bin.reserved_qty
+	("All Reservations"). This stops an active/stale reservation against a NON-open
+	SO from silently shrinking the free pool the priority allocation shares among
+	open SOs. In the healthy case (no reservations against non-open SOs) the two
+	bases are identical.
+
+	The demand side (demand = pending - reserved) is likewise open-SO-only
+	(get_reserved_map / get_line_reserved_map filter voucher_no to the open SOs), so
+	free stock and demand net exactly the same reservation universe."""
 	stock_map = get_stock_map(list(item_codes))
+	reserved_open = get_reserved_in_stock_warehouse_map(list(sales_orders))
 	out = {}
 	for item in item_codes:
 		stock = stock_map.get(item) or frappe._dict()
-		out[item] = flt(stock.get("actual_qty")) - flt(stock.get("reserved_qty"))
+		out[item] = flt(stock.get("actual_qty")) - flt(reserved_open.get(item, 0.0))
 	return out
 
 
@@ -233,7 +248,7 @@ def _resolve_statuses(so_items):
 	item_codes = {r.item_code for r in so_items}
 
 	line_reserved = get_line_reserved_map([r.so_item for r in so_items])
-	item_free = _item_free_stock_map(item_codes)
+	item_free = _item_free_stock_map(item_codes, sales_orders)
 	flags = compute_so_qualification_flags(so_items, line_reserved, item_free)
 
 	reserved_map = get_reserved_map(sales_orders)

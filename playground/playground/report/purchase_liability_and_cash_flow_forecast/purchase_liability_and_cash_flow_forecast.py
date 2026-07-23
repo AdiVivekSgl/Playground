@@ -37,11 +37,12 @@ here):
   - Return documents (is_return = 1: Purchase Returns, Debit Notes) are EXCLUDED
     from the positive stages; PI outstanding already reflects reconciled debit
     notes.
-  - billed_amt (PR/PO item) is stored in TRANSACTION currency (verified: doctype
-    field options = "currency", populated from Purchase Invoice Item.amount). It is
-    converted to company currency via the document conversion_rate before netting
-    against base_amount. PI outstanding is stored in the party-account currency and
-    converted to base via conversion_rate when that account isn't company currency.
+  - billed_amt (PR/PO item) is netted DIRECTLY against base_amount, both in COMPANY
+    currency ("Amount (Company Currency)"). On this deployment billed_amt is stored in
+    company currency; applying conversion_rate on top over-corrected and zeroed forex
+    rows, so no conversion is applied. PI outstanding is stored in the party-account
+    currency and converted to base via conversion_rate when that account isn't company
+    currency.
   - Tax gross-up is a proportional approximation, not a per-line tax computation.
   - Supplier advances are not separately modelled (they reduce PI outstanding
     once allocated).
@@ -94,11 +95,9 @@ def execute(filters=None):
 
 	rows.sort(key=lambda r: (getdate(r["forecast_payment_date"]) if r.get("forecast_payment_date") else getdate("2100-01-01")))
 
-	# Grand-total row (Forecast Liability only), appended last so it stays at the
-	# bottom and is never counted by the chart/summary computed above.
-	if rows:
-		rows.append(_grand_total_row(rows, filters))
-
+	# NB: the Forecast Liability total is rendered client-side as a persistent bar that
+	# updates with the datatable's inline column filters (see the .js). No server-side
+	# total row is appended, so it can never be mixed into filtering / chart / summary.
 	return get_columns(), rows, None, chart, summary
 
 
@@ -250,7 +249,7 @@ def _get_unbilled_rows(filters):
 	items = frappe.db.sql(
 		"""
 		SELECT pr.name AS pr_name, pr.supplier, pr.supplier_name, pr.posting_date,
-			pr.currency, pr.conversion_rate, pr.base_grand_total, pr.base_net_total,
+			pr.currency, pr.base_grand_total, pr.base_net_total,
 			pri.item_code, pri.item_name, pri.base_amount, pri.billed_amt,
 			pri.purchase_order, pri.cost_center, pri.project
 		FROM `tabPurchase Receipt Item` pri
@@ -258,7 +257,7 @@ def _get_unbilled_rows(filters):
 		WHERE pr.docstatus = 1 AND pr.is_return = 0
 			AND pr.status = 'To Bill'
 			AND pr.company = %(company)s
-			AND pri.base_amount > 0.0001
+			AND (pri.base_amount - IFNULL(pri.billed_amt, 0)) > 0.0001
 			{conds}
 		""".format(conds=conds),
 		values,
@@ -273,13 +272,11 @@ def _get_unbilled_rows(filters):
 	rows = []
 	for r in items:
 		tax_mult = _tax_mult(r.base_grand_total, r.base_net_total)
-		# billed_amt netted in company currency (see _billed_in_base for the forex /
-		# version-safe conversion), so multi-currency PRs aren't mixed or zeroed out.
-		billed_base = _billed_in_base(r.billed_amt, r.base_amount, r.conversion_rate)
-		unbilled = max(0.0, flt(r.base_amount) - billed_base) * tax_mult
+		# base_amount and billed_amt are both COMPANY currency here - net directly.
+		unbilled = max(0.0, flt(r.base_amount) - flt(r.billed_amt)) * tax_mult
 		if unbilled <= 0.0001:
 			continue
-		billed = billed_base * tax_mult
+		billed = flt(r.billed_amt) * tax_mult
 		template = po_terms.get(r.purchase_order) or supplier_terms.get(r.supplier)
 		for portion, credit_days, term in _terms_milestones(template):
 			amt = unbilled * portion
@@ -307,7 +304,7 @@ def _get_future_rows(filters):
 		"""
 		SELECT po.name AS po_name, po.supplier, po.supplier_name, po.transaction_date,
 			po.schedule_date AS po_schedule_date, po.currency, po.base_grand_total,
-			po.base_net_total, po.conversion_rate, po.payment_terms_template,
+			po.base_net_total, po.payment_terms_template,
 			poi.item_code, poi.item_name, poi.qty, poi.received_qty, poi.base_rate,
 			poi.base_amount, poi.billed_amt, poi.schedule_date, poi.cost_center, poi.project
 		FROM `tabPurchase Order Item` poi
@@ -328,10 +325,8 @@ def _get_future_rows(filters):
 	rows = []
 	for r in items:
 		received_value = flt(r.received_qty) * flt(r.base_rate)  # base_rate is company ccy
-		# billed_amt netted in company currency (forex / version-safe, see helper)
-		# before comparing against received_value / base_amount (both company currency).
-		billed_base = _billed_in_base(r.billed_amt, r.base_amount, r.conversion_rate)
-		advanced = max(received_value, billed_base)  # most-advanced already-committed value
+		# received_value, billed_amt and base_amount are all COMPANY currency here.
+		advanced = max(received_value, flt(r.billed_amt))  # most-advanced already-committed value
 		future_net = flt(r.base_amount) - advanced
 		if future_net <= 0.0001:
 			continue
@@ -519,40 +514,6 @@ def _consolidate_by_po(rows, filters):
 	return out
 
 
-def _grand_total_row(rows, filters):
-	"""A single TOTAL row summing Forecast Liability ONLY (Gross / Paid are left blank
-	as they don't sum meaningfully across stages). Appended last, after chart/summary
-	are computed, so it's never double-counted."""
-	company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
-	forecast = sum(flt(r["forecast_liability"]) for r in rows)
-	return {
-		"liability_stage": _("TOTAL"),
-		"source_doctype": None,
-		"source_document": None,
-		"supplier": None,
-		"supplier_name": None,
-		"purchase_order": None,
-		"purchase_receipt": None,
-		"purchase_invoice": None,
-		"item_code": None,
-		"item_name": None,
-		"expected_delivery_date": None,
-		"receipt_date": None,
-		"forecast_payment_date": None,
-		"gross_amount": None,
-		"paid_adjusted": None,
-		"forecast_liability": flt(forecast, 2),
-		"forecast_liability_lead": flt(forecast, 2),
-		"currency": company_currency,
-		"payment_term": None,
-		"remarks": None,
-		"days_to_due": "",
-		"due_status": "",
-		"date_bucket": "",
-		"_is_total": True,
-	}
-
-
 # --------------------------------------------------------------------------- #
 # Payment terms helpers
 # --------------------------------------------------------------------------- #
@@ -606,26 +567,6 @@ def _tax_mult(base_grand_total, base_net_total):
 	if net <= 0:
 		return 1.0
 	return flt(base_grand_total) / net
-
-
-def _billed_in_base(billed_amt, base_amount, conversion_rate):
-	"""Return billed_amt expressed in COMPANY currency.
-
-	ERPNext core stores PO/PR item billed_amt in the document's TRANSACTION currency
-	(field options = "currency", set from Purchase Invoice Item.amount), so it must be
-	multiplied by conversion_rate to compare against base_amount. However some ERPNext
-	versions / migrated data store it already in company currency; converting that
-	again would overshoot base_amount and wrongly net a forex row to zero. We detect
-	that case (converted value exceeds base_amount while the raw value fits within it)
-	and use the raw value as-is. For genuine transaction-currency billed_amt this can
-	never trigger, because billed_amt <= amount implies billed_amt*conv <= base_amount."""
-	billed = flt(billed_amt)
-	base = flt(base_amount)
-	conv = flt(conversion_rate) or 1.0
-	billed_base = billed * conv
-	if conv != 1.0 and billed_base > base + 0.01 and billed <= base + 0.01:
-		return billed  # already company currency
-	return billed_base
 
 
 # --------------------------------------------------------------------------- #

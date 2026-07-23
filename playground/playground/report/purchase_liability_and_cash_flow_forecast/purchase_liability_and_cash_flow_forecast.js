@@ -49,11 +49,6 @@ frappe.query_reports["Purchase Liability and Cash Flow Forecast"] = {
 		const formatted = default_formatter(value, row, column, data);
 		if (column.fieldname !== "liability_stage" || !data) return formatted;
 
-		// Grand TOTAL row (consolidated view) — just bold it, no stage colour.
-		if (data.liability_stage === "TOTAL") {
-			return `<span style="font-weight:700;">${formatted}</span>`;
-		}
-
 		const days = cint(data.days_to_due);
 		const stage = data.liability_stage;
 		let bg = null;
@@ -71,4 +66,58 @@ frappe.query_reports["Purchase Liability and Cash Flow Forecast"] = {
 		}
 		return formatted;
 	},
+
+	// Persistent, filter-aware total. Renders a sticky bar under the datatable showing
+	// the sum of Forecast Liability across the rows currently VISIBLE — so it updates
+	// live as the datatable's inline column filters hide/show rows. Guarded so any
+	// datatable-internal change can never break the report render.
+	after_datatable_render(datatable) {
+		try {
+			setup_forecast_total_bar(datatable);
+		} catch (e) {
+			console.error("[Purchase Liability] dynamic total bar failed:", e);
+		}
+	},
 };
+
+function setup_forecast_total_bar(datatable) {
+	const FIELD = "forecast_liability_lead"; // the lead "Forecast Liability" column
+	const wrapperEl = datatable && (datatable.wrapper || (datatable.$wrapper && datatable.$wrapper[0]));
+	if (!wrapperEl) return;
+	const $wrapper = $(wrapperEl);
+
+	let $bar = $wrapper.find(".plcf-total-bar");
+	if (!$bar.length) {
+		$bar = $(
+			'<div class="plcf-total-bar" style="position:sticky;bottom:0;z-index:6;' +
+				"background:var(--fg-color,#fff);border-top:2px solid var(--border-color,#d1d8dd);" +
+				'padding:6px 12px;font-weight:700;text-align:right;font-size:13px;"></div>'
+		);
+		$wrapper.append($bar);
+	}
+
+	const recompute = () => {
+		let total = 0;
+		const dm = datatable.datamanager;
+		if (!dm || !dm.getRow) return;
+		$wrapper.find(".dt-row").each(function () {
+			if (this.offsetParent === null) return; // filtered out / hidden
+			const m = (this.className || "").match(/dt-row-(\d+)/);
+			if (!m) return;
+			let cells;
+			try {
+				cells = dm.getRow(parseInt(m[1], 10));
+			} catch (e) {
+				return;
+			}
+			const cell = (cells || []).find((c) => c && c.column && c.column.fieldname === FIELD);
+			if (cell) total += flt(cell.content);
+		});
+		$bar.html(__("Total Forecast Liability (filtered):") + " Rs/- " + format_number(total, null, 2));
+	};
+
+	const debounced = frappe.utils.debounce(recompute, 150);
+	// Re-total whenever an inline column filter changes.
+	$wrapper.off(".plcf").on("input.plcf keyup.plcf change.plcf", ".dt-filter", debounced);
+	recompute();
+}

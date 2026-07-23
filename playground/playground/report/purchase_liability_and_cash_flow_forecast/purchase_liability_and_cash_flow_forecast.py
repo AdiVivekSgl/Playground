@@ -51,7 +51,7 @@ later as another _get_*_rows() generator feeding the same pipeline.
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, getdate, nowdate
+from frappe.utils import add_days, cint, flt, fmt_money, getdate, nowdate
 
 STAGE_ACTUAL = "Actual"
 STAGE_UNBILLED = "Received / Unbilled"
@@ -89,13 +89,14 @@ def execute(filters=None):
 	chart = _get_chart(rows)
 	summary = _get_report_summary(rows)
 
-	consolidated = cint(filters.get("consolidated"))
-	if consolidated:
+	if cint(filters.get("consolidated")):
 		rows = _consolidate_by_po(rows, filters)
 
 	rows.sort(key=lambda r: (getdate(r["forecast_payment_date"]) if r.get("forecast_payment_date") else getdate("2100-01-01")))
 
-	if consolidated and rows:
+	# Grand-total row (Forecast Liability only), appended last so it stays at the
+	# bottom and is never counted by the chart/summary computed above.
+	if rows:
 		rows.append(_grand_total_row(rows, filters))
 
 	return get_columns(), rows, None, chart, summary
@@ -257,7 +258,7 @@ def _get_unbilled_rows(filters):
 		WHERE pr.docstatus = 1 AND pr.is_return = 0
 			AND pr.status = 'To Bill'
 			AND pr.company = %(company)s
-			AND (pri.base_amount - IFNULL(pri.billed_amt, 0) * IFNULL(pr.conversion_rate, 1)) > 0.0001
+			AND pri.base_amount > 0.0001
 			{conds}
 		""".format(conds=conds),
 		values,
@@ -272,9 +273,9 @@ def _get_unbilled_rows(filters):
 	rows = []
 	for r in items:
 		tax_mult = _tax_mult(r.base_grand_total, r.base_net_total)
-		# billed_amt is TRANSACTION currency; base_amount is company currency -
-		# convert billed to base before netting so multi-currency PRs aren't mixed.
-		billed_base = flt(r.billed_amt) * (flt(r.conversion_rate) or 1.0)
+		# billed_amt netted in company currency (see _billed_in_base for the forex /
+		# version-safe conversion), so multi-currency PRs aren't mixed or zeroed out.
+		billed_base = _billed_in_base(r.billed_amt, r.base_amount, r.conversion_rate)
 		unbilled = max(0.0, flt(r.base_amount) - billed_base) * tax_mult
 		if unbilled <= 0.0001:
 			continue
@@ -327,9 +328,9 @@ def _get_future_rows(filters):
 	rows = []
 	for r in items:
 		received_value = flt(r.received_qty) * flt(r.base_rate)  # base_rate is company ccy
-		# billed_amt is TRANSACTION currency - convert to company ccy before comparing
-		# against received_value / netting against base_amount (both company currency).
-		billed_base = flt(r.billed_amt) * (flt(r.conversion_rate) or 1.0)
+		# billed_amt netted in company currency (forex / version-safe, see helper)
+		# before comparing against received_value / base_amount (both company currency).
+		billed_base = _billed_in_base(r.billed_amt, r.base_amount, r.conversion_rate)
 		advanced = max(received_value, billed_base)  # most-advanced already-committed value
 		future_net = flt(r.base_amount) - advanced
 		if future_net <= 0.0001:
@@ -519,7 +520,9 @@ def _consolidate_by_po(rows, filters):
 
 
 def _grand_total_row(rows, filters):
-	"""A single TOTAL row (appended last, after chart/summary are computed)."""
+	"""A single TOTAL row summing Forecast Liability ONLY (Gross / Paid are left blank
+	as they don't sum meaningfully across stages). Appended last, after chart/summary
+	are computed, so it's never double-counted."""
 	company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
 	forecast = sum(flt(r["forecast_liability"]) for r in rows)
 	return {
@@ -536,8 +539,8 @@ def _grand_total_row(rows, filters):
 		"expected_delivery_date": None,
 		"receipt_date": None,
 		"forecast_payment_date": None,
-		"gross_amount": flt(sum(flt(r["gross_amount"]) for r in rows), 2),
-		"paid_adjusted": flt(sum(flt(r["paid_adjusted"]) for r in rows), 2),
+		"gross_amount": None,
+		"paid_adjusted": None,
 		"forecast_liability": flt(forecast, 2),
 		"forecast_liability_lead": flt(forecast, 2),
 		"currency": company_currency,
@@ -603,6 +606,26 @@ def _tax_mult(base_grand_total, base_net_total):
 	if net <= 0:
 		return 1.0
 	return flt(base_grand_total) / net
+
+
+def _billed_in_base(billed_amt, base_amount, conversion_rate):
+	"""Return billed_amt expressed in COMPANY currency.
+
+	ERPNext core stores PO/PR item billed_amt in the document's TRANSACTION currency
+	(field options = "currency", set from Purchase Invoice Item.amount), so it must be
+	multiplied by conversion_rate to compare against base_amount. However some ERPNext
+	versions / migrated data store it already in company currency; converting that
+	again would overshoot base_amount and wrongly net a forex row to zero. We detect
+	that case (converted value exceeds base_amount while the raw value fits within it)
+	and use the raw value as-is. For genuine transaction-currency billed_amt this can
+	never trigger, because billed_amt <= amount implies billed_amt*conv <= base_amount."""
+	billed = flt(billed_amt)
+	base = flt(base_amount)
+	conv = flt(conversion_rate) or 1.0
+	billed_base = billed * conv
+	if conv != 1.0 and billed_base > base + 0.01 and billed <= base + 0.01:
+		return billed  # already company currency
+	return billed_base
 
 
 # --------------------------------------------------------------------------- #
@@ -680,16 +703,22 @@ def _get_report_summary(rows):
 
 	overdue = total(lambda r: (r["forecast_payment_date"] or today) < today)
 
+	# Number cards show a literal "Rs/-" prefix: pre-format the amount as text (Indian
+	# number grouping via fmt_money) and use datatype Data so no other currency symbol
+	# is applied on top.
+	def card(label, value, indicator):
+		return {"label": label, "value": "Rs/- " + fmt_money(flt(value), 2), "datatype": "Data", "indicator": indicator}
+
 	return [
-		{"label": _("Total Actual Payables"), "value": actual, "datatype": "Currency", "indicator": "Red"},
-		{"label": _("Total Received / Unbilled"), "value": unbilled, "datatype": "Currency", "indicator": "Blue"},
-		{"label": _("Total Future Commitments"), "value": future, "datatype": "Currency", "indicator": "Grey"},
-		{"label": _("Total Purchase Exposure"), "value": exposure, "datatype": "Currency", "indicator": "Purple"},
-		{"label": _("Overdue"), "value": overdue, "datatype": "Currency", "indicator": "Red"},
-		{"label": _("Due in 7 Days"), "value": due_within(7), "datatype": "Currency", "indicator": "Orange"},
-		{"label": _("Due in 30 Days"), "value": due_within(30), "datatype": "Currency", "indicator": "Yellow"},
-		{"label": _("Due in 60 Days"), "value": due_within(60), "datatype": "Currency", "indicator": "Green"},
-		{"label": _("Due in 90 Days"), "value": due_within(90), "datatype": "Currency", "indicator": "Green"},
+		card(_("Total Actual Payables"), actual, "Red"),
+		card(_("Total Received / Unbilled"), unbilled, "Blue"),
+		card(_("Total Future Commitments"), future, "Grey"),
+		card(_("Total Purchase Exposure"), exposure, "Purple"),
+		card(_("Overdue"), overdue, "Red"),
+		card(_("Due in 7 Days"), due_within(7), "Orange"),
+		card(_("Due in 30 Days"), due_within(30), "Yellow"),
+		card(_("Due in 60 Days"), due_within(60), "Green"),
+		card(_("Due in 90 Days"), due_within(90), "Green"),
 	]
 
 

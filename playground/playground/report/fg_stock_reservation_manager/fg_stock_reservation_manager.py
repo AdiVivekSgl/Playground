@@ -613,6 +613,36 @@ def update_dispatch_priority_date(sales_order, new_date):
 
 
 @frappe.whitelist()
+def update_sales_status(sales_order, status):
+	"""Persist an inline Sales Status edit back to Sales Order.custom_sales_status.
+	A header-level manual flag (one per SO) - the client applies the edit to every
+	row sharing that SO before calling this, so one write happens per edit. Guarded
+	by Sales Order write permission; the value must be blank (clears the flag) or one
+	of the field's own Select options, read from meta so validation never drifts from
+	the field definition. Writes via db.set_value (like update_dispatch_priority_date)
+	- it's a manual flag that drives nothing computed, so it deliberately doesn't run
+	the SO's controller hooks."""
+	if not frappe.db.has_column("Sales Order", "custom_sales_status"):
+		frappe.throw(_("The custom_sales_status field does not exist on Sales Order on this site."))
+	if not frappe.has_permission("Sales Order", "write", doc=sales_order):
+		frappe.throw(
+			_("You are not permitted to edit Sales Order {0}.").format(sales_order),
+			frappe.PermissionError,
+		)
+	status = (status or "").strip()
+	field = frappe.get_meta("Sales Order").get_field("custom_sales_status")
+	allowed = [o.strip() for o in (field.options or "").split("\n") if o.strip()] if field else []
+	if status and status not in allowed:
+		frappe.throw(
+			_("{0} is not a valid Sales Status. Choose one of: {1}").format(
+				status, ", ".join(allowed)
+			)
+		)
+	frappe.db.set_value("Sales Order", sales_order, "custom_sales_status", status)
+	return status
+
+
+@frappe.whitelist()
 def create_reservations(rows, filters=None):
 	"""Create SREs for the given lines, capped at each item's current free stock
 	in STOCK_WAREHOUSE (FIFO by the order rows arrive, which the client sends in

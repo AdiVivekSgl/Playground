@@ -4,6 +4,19 @@
 const FGSRM_METHOD_PATH =
 	"playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager";
 
+// Valid Sales Order.custom_sales_status values - kept in sync with the field's
+// Select options (fixtures/custom_field.json) and the Sales Status colour map in
+// the formatter below. Used to validate an inline edit before pushing it back.
+const SALES_STATUS_OPTIONS = [
+	"Inspection Awaited",
+	"DI Awaited",
+	"Payment Awaited",
+	"Customer Delay",
+	"Hold",
+	"Approval Issue",
+	"Urgent",
+];
+
 // Playground's own 3-sheet workbook (FGSRM view / FG Requirement / RM Component
 // Shortage) for a created Production Plan. Separate from frontec's MR Hierarchy
 // Excel, which is left untouched and still available from the plan form.
@@ -837,11 +850,11 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		// Colour-code Material Status so the six states are scannable at a glance.
 		if (f === "material_status") {
 			const colors = {
-				"Ready to Dispatch": "#e1f5ee", // green — good to go
-				Inspected: "#e8f5e9", // light green — cleared inspection
-				"Possible to Push": "#fff3e0", // amber — actionable
+				Reserved: "#e1f5ee", // green — fully reserved, good to go
+				Available: "#e8f5e9", // light green — coverable at its own priority
+				"Possible to Push": "#fff3e0", // amber — coverable if earlier SOs slip
 				"Needs Attention": "#fde2e7", // red — problem
-				Reprioritize: "#ede7f6", // purple — far-out, revisit
+				Reprioritized: "#ede7f6", // purple — was reserved, then cancelled
 				"Planning Pending": "#eceff1", // grey — awaiting planning
 			};
 			const bg = colors[value];
@@ -894,9 +907,16 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		const date_editable =
 			frappe.query_report.get_filter_value("date_basis") === "Custom Updated Delivery Date";
 
+		// Sales Status is a header-level SO field; only expose it as editable in the
+		// one-row-per-SO "Group by Sales Order" view, where each row maps cleanly to a
+		// single Sales Order (in the per-line view the value is repeated across an SO's
+		// lines, so an inline edit there would be ambiguous).
+		const grouping = cint(frappe.query_report.get_filter_value("group_by_so"));
+
 		datatable_options.columns.forEach((column) => {
 			if (column.id === "reserve_qty") column.editable = true;
 			if (column.id === "so_date") column.editable = date_editable;
+			if (column.id === "sales_status") column.editable = grouping;
 		});
 
 		datatable_options.events = datatable_options.events || {};
@@ -944,6 +964,54 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 					callback() {
 						frappe.show_alert({
 							message: __("Dispatch Priority Date saved for {0}.", [row_values.sales_order]),
+							indicator: "green",
+						});
+					},
+				});
+			}
+
+			if (cell_id === "sales_status") {
+				// Only editable in the grouped (one-row-per-SO) view.
+				if (!grouping) return;
+
+				let status = (new_val || "").trim();
+				// Empty clears the flag; otherwise accept a case-insensitive match to
+				// a valid option and normalise to its canonical spelling.
+				if (status) {
+					const match = SALES_STATUS_OPTIONS.find(
+						(o) => o.toLowerCase() === status.toLowerCase()
+					);
+					if (!match) {
+						frappe.show_alert({
+							message: __("Invalid Sales Status. Valid options: {0}", [
+								SALES_STATUS_OPTIONS.join(", "),
+							]),
+							indicator: "red",
+						});
+						// Revert the edited cell to the stored value.
+						if (frappe.query_report.datatable) {
+							frappe.query_report.datatable.refresh(frappe.query_report.data);
+						}
+						return;
+					}
+					status = match;
+				}
+
+				// Header-level SO field: mirror to every row sharing this SO (the
+				// grouped view has one, but stay consistent with the so_date handler).
+				(frappe.query_report.data || []).forEach((r) => {
+					if (r.sales_order === row_values.sales_order) r.sales_status = status;
+				});
+				if (frappe.query_report.datatable) {
+					frappe.query_report.datatable.refresh(frappe.query_report.data);
+				}
+
+				frappe.call({
+					method: `${FGSRM_METHOD_PATH}.update_sales_status`,
+					args: { sales_order: row_values.sales_order, status: status },
+					callback() {
+						frappe.show_alert({
+							message: __("Sales Status saved for {0}.", [row_values.sales_order]),
 							indicator: "green",
 						});
 					},

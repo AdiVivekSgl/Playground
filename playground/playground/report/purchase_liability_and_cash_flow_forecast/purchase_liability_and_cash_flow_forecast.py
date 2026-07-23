@@ -37,8 +37,11 @@ here):
   - Return documents (is_return = 1: Purchase Returns, Debit Notes) are EXCLUDED
     from the positive stages; PI outstanding already reflects reconciled debit
     notes.
-  - billed_amt (PR/PO item) is treated as company currency; PI outstanding is
-    converted to base via conversion_rate.
+  - billed_amt (PR/PO item) is stored in TRANSACTION currency (verified: doctype
+    field options = "currency", populated from Purchase Invoice Item.amount). It is
+    converted to company currency via the document conversion_rate before netting
+    against base_amount. PI outstanding is stored in the party-account currency and
+    converted to base via conversion_rate when that account isn't company currency.
   - Tax gross-up is a proportional approximation, not a per-line tax computation.
   - Supplier advances are not separately modelled (they reduce PI outstanding
     once allocated).
@@ -79,9 +82,23 @@ def execute(filters=None):
 		rows += _get_future_rows(filters)
 
 	rows = _finalize_rows(rows, filters)
+
+	# Summary cards and the stacked chart are split by liability stage; a consolidated
+	# PO can span stages ("Mixed"), so compute both from the stage-split detail rows
+	# before any grouping - keeping them accurate and never double-counting a total.
+	chart = _get_chart(rows)
+	summary = _get_report_summary(rows)
+
+	consolidated = cint(filters.get("consolidated"))
+	if consolidated:
+		rows = _consolidate_by_po(rows, filters)
+
 	rows.sort(key=lambda r: (getdate(r["forecast_payment_date"]) if r.get("forecast_payment_date") else getdate("2100-01-01")))
 
-	return get_columns(), rows, None, _get_chart(rows), _get_report_summary(rows)
+	if consolidated and rows:
+		rows.append(_grand_total_row(rows, filters))
+
+	return get_columns(), rows, None, chart, summary
 
 
 # --------------------------------------------------------------------------- #
@@ -89,13 +106,18 @@ def execute(filters=None):
 # --------------------------------------------------------------------------- #
 
 def get_columns():
+	# Lead block (summary): Liability Stage, Forecast Payment Date, Due Status,
+	# Supplier, Forecast Liability. Then Supplier Name and the detail block. The
+	# lead Forecast Liability uses a distinct fieldname (forecast_liability_lead)
+	# because Frappe keys data by fieldname - it mirrors forecast_liability. Days
+	# to Due and Bucket were relocated into the detail block. All money columns
+	# point at the per-row `currency` field (company currency) for correct symbols.
 	return [
-		{"label": _("Forecast Payment Date"), "fieldname": "forecast_payment_date", "fieldtype": "Date", "width": 130},
-		{"label": _("Days to Due"), "fieldname": "days_to_due", "fieldtype": "Int", "width": 90},
-		{"label": _("Bucket"), "fieldname": "date_bucket", "fieldtype": "Data", "width": 100},
+		{"label": _("Liability Stage"), "fieldname": "liability_stage", "fieldtype": "Data", "width": 150},
+		{"label": _("Forecast Payment Date"), "fieldname": "forecast_payment_date", "fieldtype": "Date", "width": 140},
 		{"label": _("Due Status"), "fieldname": "due_status", "fieldtype": "Data", "width": 90},
-		{"label": _("Liability Stage"), "fieldname": "liability_stage", "fieldtype": "Data", "width": 140},
 		{"label": _("Supplier"), "fieldname": "supplier", "fieldtype": "Link", "options": "Supplier", "width": 130},
+		{"label": _("Forecast Liability"), "fieldname": "forecast_liability_lead", "fieldtype": "Currency", "options": "currency", "width": 140},
 		{"label": _("Supplier Name"), "fieldname": "supplier_name", "fieldtype": "Data", "width": 160},
 		{"label": _("Source Type"), "fieldname": "source_doctype", "fieldtype": "Data", "width": 120},
 		{"label": _("Source Document"), "fieldname": "source_document", "fieldtype": "Dynamic Link", "options": "source_doctype", "width": 150},
@@ -106,12 +128,14 @@ def get_columns():
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 150},
 		{"label": _("Expected Delivery Date"), "fieldname": "expected_delivery_date", "fieldtype": "Date", "width": 130},
 		{"label": _("Receipt Date"), "fieldname": "receipt_date", "fieldtype": "Date", "width": 110},
-		{"label": _("Gross / Base Amount"), "fieldname": "gross_amount", "fieldtype": "Currency", "width": 130},
-		{"label": _("Paid / Adjusted"), "fieldname": "paid_adjusted", "fieldtype": "Currency", "width": 120},
-		{"label": _("Forecast Liability"), "fieldname": "forecast_liability", "fieldtype": "Currency", "width": 140},
+		{"label": _("Gross / Base Amount"), "fieldname": "gross_amount", "fieldtype": "Currency", "options": "currency", "width": 130},
+		{"label": _("Paid / Adjusted"), "fieldname": "paid_adjusted", "fieldtype": "Currency", "options": "currency", "width": 120},
+		{"label": _("Forecast Liability"), "fieldname": "forecast_liability", "fieldtype": "Currency", "options": "currency", "width": 140},
 		{"label": _("Payment Term"), "fieldname": "payment_term", "fieldtype": "Data", "width": 130},
 		{"label": _("Currency"), "fieldname": "currency", "fieldtype": "Data", "width": 70},
 		{"label": _("Remarks"), "fieldname": "remarks", "fieldtype": "Data", "width": 220},
+		{"label": _("Days to Due"), "fieldname": "days_to_due", "fieldtype": "Int", "width": 90},
+		{"label": _("Bucket"), "fieldname": "date_bucket", "fieldtype": "Data", "width": 100},
 	]
 
 
@@ -225,7 +249,7 @@ def _get_unbilled_rows(filters):
 	items = frappe.db.sql(
 		"""
 		SELECT pr.name AS pr_name, pr.supplier, pr.supplier_name, pr.posting_date,
-			pr.currency, pr.base_grand_total, pr.base_net_total,
+			pr.currency, pr.conversion_rate, pr.base_grand_total, pr.base_net_total,
 			pri.item_code, pri.item_name, pri.base_amount, pri.billed_amt,
 			pri.purchase_order, pri.cost_center, pri.project
 		FROM `tabPurchase Receipt Item` pri
@@ -233,7 +257,7 @@ def _get_unbilled_rows(filters):
 		WHERE pr.docstatus = 1 AND pr.is_return = 0
 			AND pr.status = 'To Bill'
 			AND pr.company = %(company)s
-			AND (pri.base_amount - IFNULL(pri.billed_amt, 0)) > 0.0001
+			AND (pri.base_amount - IFNULL(pri.billed_amt, 0) * IFNULL(pr.conversion_rate, 1)) > 0.0001
 			{conds}
 		""".format(conds=conds),
 		values,
@@ -248,10 +272,13 @@ def _get_unbilled_rows(filters):
 	rows = []
 	for r in items:
 		tax_mult = _tax_mult(r.base_grand_total, r.base_net_total)
-		unbilled = max(0.0, flt(r.base_amount) - flt(r.billed_amt)) * tax_mult
+		# billed_amt is TRANSACTION currency; base_amount is company currency -
+		# convert billed to base before netting so multi-currency PRs aren't mixed.
+		billed_base = flt(r.billed_amt) * (flt(r.conversion_rate) or 1.0)
+		unbilled = max(0.0, flt(r.base_amount) - billed_base) * tax_mult
 		if unbilled <= 0.0001:
 			continue
-		billed = flt(r.billed_amt) * tax_mult
+		billed = billed_base * tax_mult
 		template = po_terms.get(r.purchase_order) or supplier_terms.get(r.supplier)
 		for portion, credit_days, term in _terms_milestones(template):
 			amt = unbilled * portion
@@ -279,7 +306,7 @@ def _get_future_rows(filters):
 		"""
 		SELECT po.name AS po_name, po.supplier, po.supplier_name, po.transaction_date,
 			po.schedule_date AS po_schedule_date, po.currency, po.base_grand_total,
-			po.base_net_total, po.payment_terms_template,
+			po.base_net_total, po.conversion_rate, po.payment_terms_template,
 			poi.item_code, poi.item_name, poi.qty, poi.received_qty, poi.base_rate,
 			poi.base_amount, poi.billed_amt, poi.schedule_date, poi.cost_center, poi.project
 		FROM `tabPurchase Order Item` poi
@@ -299,8 +326,11 @@ def _get_future_rows(filters):
 
 	rows = []
 	for r in items:
-		received_value = flt(r.received_qty) * flt(r.base_rate)
-		advanced = max(received_value, flt(r.billed_amt))  # most-advanced already-committed value
+		received_value = flt(r.received_qty) * flt(r.base_rate)  # base_rate is company ccy
+		# billed_amt is TRANSACTION currency - convert to company ccy before comparing
+		# against received_value / netting against base_amount (both company currency).
+		billed_base = flt(r.billed_amt) * (flt(r.conversion_rate) or 1.0)
+		advanced = max(received_value, billed_base)  # most-advanced already-committed value
 		future_net = flt(r.base_amount) - advanced
 		if future_net <= 0.0001:
 			continue
@@ -368,6 +398,7 @@ def _row(**kw):
 		"gross_amount": flt(kw.get("gross"), 2),
 		"paid_adjusted": flt(kw.get("paid"), 2),
 		"forecast_liability": flt(kw.get("forecast"), 2),
+		"forecast_liability_lead": flt(kw.get("forecast"), 2),
 		"currency": kw.get("currency"),
 		"payment_term": kw.get("payment_term"),
 		"remarks": kw.get("remarks"),
@@ -376,6 +407,10 @@ def _row(**kw):
 
 def _finalize_rows(rows, filters):
 	today = getdate(nowdate())
+	# Every amount in a row is company (base) currency - stamp the row currency with
+	# the company default so the Currency columns render the right symbol regardless
+	# of the source document's transaction currency.
+	company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
 	include_overdue = cint(filters.get("include_overdue", 1))
 	from_date = getdate(filters.get("from_date")) if filters.get("from_date") else None
 	to_date = getdate(filters.get("to_date")) if filters.get("to_date") else None
@@ -400,6 +435,7 @@ def _finalize_rows(rows, filters):
 		r["days_to_due"] = days
 		r["due_status"] = _("Overdue") if days < 0 else (_("Due") if days == 0 else _("Upcoming"))
 		r["date_bucket"] = _bucket(days)
+		r["currency"] = company_currency
 		out.append(r)
 	return out
 
@@ -420,6 +456,98 @@ def _bucket(days):
 	if days <= 90:
 		return _("61-90 Days")
 	return _("90+ Days")
+
+
+# --------------------------------------------------------------------------- #
+# Consolidated view (group + total by Purchase Order)
+# --------------------------------------------------------------------------- #
+
+def _consolidate_by_po(rows, filters):
+	"""Collapse detail rows into one summary row per Purchase Order, totalling the
+	amounts. Rows with no PO (Stage 1 Actual, and any PR not raised from a PO) are
+	grouped by their own source document instead, so nothing is dropped. The group's
+	forecast date is the EARLIEST milestone in it (the soonest cash need)."""
+	company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
+	today = getdate(nowdate())
+
+	groups = {}
+	for r in rows:
+		key = r.get("purchase_order") or r.get("source_document")
+		groups.setdefault(key, []).append(r)
+
+	out = []
+	for key, grp in groups.items():
+		stages = {g["liability_stage"] for g in grp}
+		stage = next(iter(stages)) if len(stages) == 1 else _("Mixed")
+		has_po = bool(grp[0].get("purchase_order"))
+		src_type = grp[0].get("source_doctype")
+
+		dates = [g["forecast_payment_date"] for g in grp if g.get("forecast_payment_date")]
+		fdate = min(dates) if dates else None
+		days = (fdate - today).days if fdate else None
+
+		forecast = sum(flt(g["forecast_liability"]) for g in grp)
+		out.append({
+			"liability_stage": stage,
+			"source_doctype": "Purchase Order" if has_po else src_type,
+			"source_document": key,
+			"supplier": grp[0].get("supplier"),
+			"supplier_name": grp[0].get("supplier_name"),
+			"purchase_order": key if has_po else None,
+			"purchase_receipt": None,
+			"purchase_invoice": key if (not has_po and src_type == "Purchase Invoice") else None,
+			"item_code": None,
+			"item_name": None,
+			"expected_delivery_date": None,
+			"receipt_date": None,
+			"forecast_payment_date": fdate,
+			"gross_amount": flt(sum(flt(g["gross_amount"]) for g in grp), 2),
+			"paid_adjusted": flt(sum(flt(g["paid_adjusted"]) for g in grp), 2),
+			"forecast_liability": flt(forecast, 2),
+			"forecast_liability_lead": flt(forecast, 2),
+			"currency": company_currency,
+			"payment_term": _("Multiple") if len(grp) > 1 else grp[0].get("payment_term"),
+			"remarks": _("Consolidated: {0} line(s)").format(len(grp)),
+			"days_to_due": days if days is not None else "",
+			"due_status": (
+				(_("Overdue") if days < 0 else (_("Due") if days == 0 else _("Upcoming")))
+				if days is not None else ""
+			),
+			"date_bucket": _bucket(days) if days is not None else "",
+		})
+	return out
+
+
+def _grand_total_row(rows, filters):
+	"""A single TOTAL row (appended last, after chart/summary are computed)."""
+	company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
+	forecast = sum(flt(r["forecast_liability"]) for r in rows)
+	return {
+		"liability_stage": _("TOTAL"),
+		"source_doctype": None,
+		"source_document": None,
+		"supplier": None,
+		"supplier_name": None,
+		"purchase_order": None,
+		"purchase_receipt": None,
+		"purchase_invoice": None,
+		"item_code": None,
+		"item_name": None,
+		"expected_delivery_date": None,
+		"receipt_date": None,
+		"forecast_payment_date": None,
+		"gross_amount": flt(sum(flt(r["gross_amount"]) for r in rows), 2),
+		"paid_adjusted": flt(sum(flt(r["paid_adjusted"]) for r in rows), 2),
+		"forecast_liability": flt(forecast, 2),
+		"forecast_liability_lead": flt(forecast, 2),
+		"currency": company_currency,
+		"payment_term": None,
+		"remarks": None,
+		"days_to_due": "",
+		"due_status": "",
+		"date_bucket": "",
+		"_is_total": True,
+	}
 
 
 # --------------------------------------------------------------------------- #

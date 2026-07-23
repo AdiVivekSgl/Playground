@@ -19,6 +19,12 @@ frappe.query_reports["Purchase Liability and Cash Flow Forecast"] = {
 			fieldtype: "Check",
 			default: 1,
 		},
+		{
+			fieldname: "consolidated",
+			label: __("Consolidated View (by Purchase Order)"),
+			fieldtype: "Check",
+			default: 0,
+		},
 		{ fieldname: "supplier", label: __("Supplier"), fieldtype: "Link", options: "Supplier" },
 		{ fieldname: "supplier_group", label: __("Supplier Group"), fieldtype: "Link", options: "Supplier Group" },
 		{
@@ -42,6 +48,11 @@ frappe.query_reports["Purchase Liability and Cash Flow Forecast"] = {
 	formatter(value, row, column, data, default_formatter) {
 		const formatted = default_formatter(value, row, column, data);
 		if (column.fieldname !== "liability_stage" || !data) return formatted;
+
+		// Grand TOTAL row (consolidated view) — just bold it, no stage colour.
+		if (data.liability_stage === "TOTAL") {
+			return `<span style="font-weight:700;">${formatted}</span>`;
+		}
 
 		const days = cint(data.days_to_due);
 		const stage = data.liability_stage;

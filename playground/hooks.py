@@ -11,6 +11,10 @@ app_license = "MIT"
 # customization that doesn't survive a fresh site.
 doctype_js = {
 	"Work Order": "public/js/work_order.js",
+	# Adds the "Replace Component Item" action to ERPNext's native BOM Update
+	# Tool - swap one component item for another across BOMs, raw materials and
+	# sub-assemblies alike (see playground/playground/bom_component_replace.py).
+	"BOM Update Tool": "public/js/bom_update_tool.js",
 }
 
 # List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk

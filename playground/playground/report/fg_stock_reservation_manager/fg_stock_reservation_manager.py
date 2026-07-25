@@ -132,21 +132,25 @@ def execute(filters=None):
 	# "Date" column shows the SO date chosen by the Date Basis dropdown.
 	so_date_map = _get_so_date_map(sos, filters.get("date_basis"))
 
-	# Per-SO status flags: custom_material_status (computed, from the Material
-	# Status feature) and custom_sales_status (a manual sales-side flag). Each
-	# column is fetched only when it exists, so this still runs on a site where
-	# one or both haven't been installed.
+	# Per-SO status flags: custom_material_status (computed fulfillment text),
+	# custom_needs_attention (computed red-border flag) and custom_sales_status (a
+	# manual sales-side flag). Each column is fetched only when it exists, so this
+	# still runs on a site where one or more haven't been installed.
 	so_material_status = {}
+	so_needs_attention = {}
 	so_sales_status = {}
 	if sos:
 		status_fields = ["name"]
 		if frappe.db.has_column("Sales Order", "custom_material_status"):
 			status_fields.append("custom_material_status")
+		if frappe.db.has_column("Sales Order", "custom_needs_attention"):
+			status_fields.append("custom_needs_attention")
 		if frappe.db.has_column("Sales Order", "custom_sales_status"):
 			status_fields.append("custom_sales_status")
 		if len(status_fields) > 1:
 			for r in frappe.get_all("Sales Order", filters={"name": ["in", sos]}, fields=status_fields):
 				so_material_status[r.name] = r.get("custom_material_status")
+				so_needs_attention[r.name] = r.get("custom_needs_attention")
 				so_sales_status[r.name] = r.get("custom_sales_status")
 
 	# Item free stock is shared across an item's SO lines; deduct as we walk the
@@ -228,6 +232,7 @@ def execute(filters=None):
 				"item_code": r.item_code,
 				"item_name": details.get("item_name"),
 				"material_status": so_material_status.get(r.sales_order),
+				"needs_attention": so_needs_attention.get(r.sales_order),
 				"sales_status": so_sales_status.get(r.sales_order),
 				"customer": r.customer,
 				"sales_order": r.sales_order,
@@ -316,6 +321,7 @@ def _collapse_by_so(rows):
 			agg = {
 				"sales_order": so,
 				"material_status": r.get("material_status"),
+				"needs_attention": r.get("needs_attention"),
 				"sales_status": r.get("sales_status"),
 				"customer": r.get("customer"),
 				"so_date": r.get("so_date"),
@@ -409,6 +415,7 @@ def _build_manual_rows(filters, free_left, item_free_stock_map, unreserved_basis
 				"item_code": item,
 				"item_name": r.get("item_name"),
 				"material_status": None,
+				"needs_attention": None,
 				"sales_status": None,
 				"customer": r.get("customer"),
 				"sales_order": None,

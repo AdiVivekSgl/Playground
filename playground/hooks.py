@@ -52,6 +52,7 @@ fixtures = [
 				"in",
 				[
 					"custom_material_status",
+					"custom_needs_attention",
 					"custom_sales_status",
 					"custom_inspection_completed",
 					"delivery_date_revision_count",

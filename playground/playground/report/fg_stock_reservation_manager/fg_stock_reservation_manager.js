@@ -847,19 +847,24 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		if (f === "reserve_qty") {
 			return `<span style="font-weight:600;">${formatted}</span>`;
 		}
-		// Colour-code Material Status so the six states are scannable at a glance.
+		// Colour-code Material Status by fulfillment state, and draw a bold red
+		// border whenever the SO needs attention (custom_needs_attention) - a
+		// decoupled flag that rides on top of ANY status text (even "Reserved").
 		if (f === "material_status") {
 			const colors = {
 				Reserved: "#e1f5ee", // green — fully reserved, good to go
 				Available: "#e8f5e9", // light green — coverable at its own priority
 				"Possible to Push": "#fff3e0", // amber — coverable if earlier SOs slip
-				"Needs Attention": "#fde2e7", // red — problem
+				"Needs Attention": "#fde2e7", // red — fallback text (no fulfillment state)
 				Reprioritized: "#ede7f6", // purple — was reserved, then cancelled
 				"Planning Pending": "#eceff1", // grey — awaiting planning
 			};
 			const bg = colors[value];
-			if (bg) {
-				return `<div style="background-color:${bg};margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
+			const attention = data && cint(data.needs_attention);
+			if (bg || attention) {
+				const bgStyle = bg ? `background-color:${bg};` : "";
+				const borderStyle = attention ? "border:2px solid #c62828;" : "";
+				return `<div style="${bgStyle}${borderStyle}margin:-8px -12px;padding:8px 12px;font-weight:600;">${formatted}</div>`;
 			}
 			return formatted;
 		}

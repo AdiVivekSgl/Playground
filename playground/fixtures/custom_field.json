@@ -33,13 +33,28 @@
   "fieldname": "custom_material_status",
   "label": "Material Status",
   "fieldtype": "Select",
-  "options": "\nReserved\nNeeds Attention\nAvailable\nPossible to Push\nReprioritized\nPlanning Pending",
+  "options": "\nReserved\nAvailable\nPossible to Push\nNeeds Attention\nReprioritized\nPlanning Pending",
   "insert_after": "status",
   "read_only": 1,
   "in_list_view": 1,
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Computed operational status resolved by a fixed precedence chain (see playground/playground/sales_order_hooks.py): Reserved > Needs Attention > Available > Possible to Push > Reprioritized > Planning Pending. Needs Attention also fires when the updated delivery date slips >21 days past delivery_date. Available/Possible to Push are decided by a FIFO-by-dispatch-date free-stock allocation across competing SOs. Read-only: set by the hourly scheduler and targeted recompute hooks (reservation submit/cancel, snapshot submit, SO save). Blank means none of the six rules matched."
+  "description": "Computed fulfillment status by fixed precedence (see playground/playground/sales_order_hooks.py): Reserved > Available > Possible to Push > Needs Attention (fallback) > Reprioritized > Planning Pending. 'Needs Attention' is decoupled: the condition (revision > 4 OR updated delivery date slips >21 days past delivery_date) sets custom_needs_attention (a red border on top of ANY text) and is only the fallback TEXT here when no fulfillment state applies. Available/Possible to Push use a FIFO-by-dispatch-date free-stock allocation across competing SOs. Read-only: set by the hourly scheduler and targeted recompute hooks. Blank means no rule matched."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Order-custom_needs_attention",
+  "dt": "Sales Order",
+  "fieldname": "custom_needs_attention",
+  "label": "Needs Attention",
+  "fieldtype": "Check",
+  "default": "0",
+  "insert_after": "custom_material_status",
+  "read_only": 1,
+  "in_list_view": 0,
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "Computed flag: 1 when the order needs attention (delivery_date_revision_count > 4, OR custom_updated_delivery_date slipped >21 days past delivery_date). Decoupled from custom_material_status so a bold red border can be drawn on the status cell (FGSRM report + SO list view) on top of ANY fulfillment text. Read-only: set by the same scheduler/recompute hooks as custom_material_status."
  },
  {
   "doctype": "Custom Field",

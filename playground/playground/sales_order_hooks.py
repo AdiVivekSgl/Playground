@@ -5,26 +5,33 @@
 Sales Order — Material Status
 =============================
 
-Computes Sales Order.custom_material_status: a single at-a-glance operational
-read on where an order stands. One field, one value, resolved by a fixed
-precedence chain (first match wins):
+Computes two fields on Sales Order:
+  - custom_material_status : the fulfillment TEXT, resolved by the precedence below.
+  - custom_needs_attention : a decoupled boolean flag. It is NOT a status value;
+    it drives a bold red border drawn on top of WHATEVER text is shown (a Reserved
+    order can still 'need attention'), rendered by the FGSRM report + SO list view.
+
+Material Status precedence (first match wins):
 
   1. Reserved          every open line fully reserved (short-to-complete == 0)
-  2. Needs Attention   delivery_date_revision_count > 4, OR custom_updated_delivery_date
-                       slipped more than 21 days past the header delivery_date
-  3. Available         coverable from free stock AT THE SO'S OWN DISPATCH PRIORITY:
+  2. Available         coverable from free stock AT THE SO'S OWN DISPATCH PRIORITY:
                        after every earlier-dated SO competing for the same items
                        takes its share of free stock, this SO's every line is still
                        fully covered
-  4. Possible to Push  coverable in isolation but NOT Available - it could be made
+  3. Possible to Push  coverable in isolation but NOT Available - it could be made
                        Available by delaying SOs scheduled for an earlier date
+  4. Needs Attention   FALLBACK TEXT only, when no fulfillment state above applies
+                       and the Needs-Attention condition holds (revision count > 4,
+                       OR custom_updated_delivery_date slipped > 21 days past the
+                       header delivery_date). The condition ALSO sets
+                       custom_needs_attention -> red border - independent of this text.
   5. Reprioritized     not fully reserved AND has cancelled Stock Reservation
                        Entries (reservations were placed, then cancelled)
   6. Planning Pending  no submitted Weekly Planning Snapshot approved after the SO's
                        transaction_date covers all of the SO's lines
 
-If none match, the field is left BLANK - we don't invent a status. Treat a blank
-Material Status as "no actionable signal from these six rules".
+If none match, the text is left BLANK - we don't invent a status (the red border
+can still show if the Needs-Attention condition holds).
 
 Ranks 1 & 4 reuse compute_so_qualification_flags() (`ready` / `coverable`) - the
 exact helper FGSRM's view filters use. Rank 3 reuses compute_priority_availability(),
@@ -49,7 +56,7 @@ but no longer drives status).
 """
 
 import frappe
-from frappe.utils import add_days, flt, getdate
+from frappe.utils import add_days, cint, flt, getdate
 
 from playground.playground.report.production_requirement_report.production_requirement_report import (
 	CUSTOM_DELIVERY_DATE_FIELD,
@@ -66,6 +73,7 @@ from playground.playground.report.fg_stock_reservation_manager.fg_stock_reservat
 )
 
 MATERIAL_STATUS_FIELD = "custom_material_status"
+NEEDS_ATTENTION_FIELD = "custom_needs_attention"
 REVISION_COUNT_FIELD = "delivery_date_revision_count"
 
 # Revision count above which an order is flagged Needs Attention.
@@ -171,16 +179,13 @@ def _is_planning_pending(so_item_names, covered_lines):
 # Precedence chain (pure) - the single definition of the ordering
 # --------------------------------------------------------------------------- #
 
-def _resolve_material_status(header, so_flags, available, has_cancelled_sre, planning_pending):
-	"""Apply the fixed precedence to already-gathered inputs. Returns the status
-	string, or None when nothing matches (field left blank - see module docstring)."""
-	# 1. Reserved
-	if so_flags.get("ready"):
-		return "Reserved"
-
-	# 2. Needs Attention - too many delivery-date revisions, OR the updated
-	#    (dispatch-priority) delivery date has slipped more than 21 days past the
-	#    header delivery_date.
+def _needs_attention(header):
+	"""The Needs-Attention CONDITION (independent of the fulfillment text): too many
+	delivery-date revisions, OR the updated (dispatch-priority) delivery date has
+	slipped more than 21 days past the header delivery_date. Stored separately in
+	custom_needs_attention so a red border can be shown on top of ANY status text
+	(a Reserved order can still 'need attention'), and used as the rank-4 fallback
+	text when no fulfillment state applies."""
 	updated_date = header.get(CUSTOM_DELIVERY_DATE_FIELD)
 	delivery_date = header.get("delivery_date")
 	slipped = bool(
@@ -188,16 +193,31 @@ def _resolve_material_status(header, so_flags, available, has_cancelled_sre, pla
 		and delivery_date
 		and getdate(updated_date) > getdate(add_days(delivery_date, DELIVERY_DATE_SLIP_DAYS))
 	)
-	if (header.get(REVISION_COUNT_FIELD) or 0) > REVISION_ATTENTION_THRESHOLD or slipped:
-		return "Needs Attention"
+	return (header.get(REVISION_COUNT_FIELD) or 0) > REVISION_ATTENTION_THRESHOLD or slipped
 
-	# 3. Available (covered after priority allocation)
+
+def _resolve_material_status(so_flags, available, needs_attention, has_cancelled_sre, planning_pending):
+	"""Apply the fixed precedence to already-gathered inputs. Returns the status
+	string, or None when nothing matches (field left blank - see module docstring).
+
+	Needs Attention is a decoupled flag: it drives a red border on top of whatever
+	text this returns (rendered by the report / list view from custom_needs_attention)
+	AND, when no fulfillment state applies, is the rank-4 fallback text here."""
+	# 1. Reserved
+	if so_flags.get("ready"):
+		return "Reserved"
+
+	# 2. Available (covered after priority allocation)
 	if available:
 		return "Available"
 
-	# 4. Possible to Push (coverable in isolation but blocked by earlier-dated SOs)
+	# 3. Possible to Push (coverable in isolation but blocked by earlier-dated SOs)
 	if so_flags.get("coverable"):
 		return "Possible to Push"
+
+	# 4. Needs Attention (fallback text only - the border shows regardless of text)
+	if needs_attention:
+		return "Needs Attention"
 
 	# 5. Reprioritized (reservations placed then cancelled, no longer covered)
 	if has_cancelled_sre:
@@ -240,7 +260,7 @@ def _resolve_statuses(so_items):
 	so_items. so_items MUST be the full competing universe for those SOs' items -
 	priority availability needs same-item peers - so callers pass either the whole
 	open-SO set (hourly) or an item cluster (targeted). Builds all shared maps
-	once. Returns {sales_order: status or None}."""
+	once. Returns {sales_order: (status_or_None, needs_attention_bool)}."""
 	if not so_items:
 		return {}
 
@@ -274,70 +294,88 @@ def _resolve_statuses(so_items):
 		header = headers.get(so) or frappe._dict()
 		so_flags = flags.get(so, {"ready": True, "coverable": True})
 		planning_pending = _is_planning_pending(items_by_so.get(so, []), covered_by_so.get(so, set()))
-		out[so] = _resolve_material_status(
-			header,
+		needs_attention = _needs_attention(header)
+		status = _resolve_material_status(
 			so_flags,
 			available_map.get(so, True),
+			needs_attention,
 			so in cancelled_sos,
 			planning_pending,
 		)
+		out[so] = (status, needs_attention)
 	return out
 
 
-def _write_status(sales_order, status):
-	"""Persist a resolved status, writing only on a real change. Uses db.set_value
-	(update_modified=False) so it doesn't churn the modified timestamp or re-fire
-	on_update. No-op if the field isn't installed on this site."""
-	if not frappe.db.has_column("Sales Order", MATERIAL_STATUS_FIELD):
-		return
-	status = status or ""
-	current = frappe.db.get_value("Sales Order", sales_order, MATERIAL_STATUS_FIELD) or ""
-	if status != current:
-		frappe.db.set_value(
-			"Sales Order", sales_order, MATERIAL_STATUS_FIELD, status, update_modified=False
-		)
+def _write_status(sales_order, status, needs_attention):
+	"""Persist the resolved Material Status text AND the Needs-Attention flag, each
+	written only on a real change. Uses db.set_value(update_modified=False) so it
+	doesn't churn the modified timestamp or re-fire on_update. Each field is a no-op
+	if it isn't installed on this site."""
+	if frappe.db.has_column("Sales Order", MATERIAL_STATUS_FIELD):
+		status = status or ""
+		current = frappe.db.get_value("Sales Order", sales_order, MATERIAL_STATUS_FIELD) or ""
+		if status != current:
+			frappe.db.set_value(
+				"Sales Order", sales_order, MATERIAL_STATUS_FIELD, status, update_modified=False
+			)
+	if frappe.db.has_column("Sales Order", NEEDS_ATTENTION_FIELD):
+		flag = 1 if needs_attention else 0
+		current_flag = cint(frappe.db.get_value("Sales Order", sales_order, NEEDS_ATTENTION_FIELD))
+		if flag != current_flag:
+			frappe.db.set_value(
+				"Sales Order", sales_order, NEEDS_ATTENTION_FIELD, flag, update_modified=False
+			)
 
 
 def _persist_statuses(so_items):
 	"""Resolve the competing universe and persist every changed value."""
-	for so, status in _resolve_statuses(so_items).items():
-		_write_status(so, status)
+	for so, (status, needs_attention) in _resolve_statuses(so_items).items():
+		_write_status(so, status, needs_attention)
 
 
 # --------------------------------------------------------------------------- #
 # Public single-SO compute (introspection) + entry points
 # --------------------------------------------------------------------------- #
 
-def compute_material_status(sales_order):
-	"""Correct single-SO status (no persist). Expands to the SO's item cluster so
-	priority availability sees competing peers, then returns THIS SO's status (or
-	None). A submitted SO with no open lines is vacuously Reserved."""
+def _resolve_single(sales_order):
+	"""Resolve (status, needs_attention) for one SO, expanding to its item cluster so
+	priority availability is correct. A submitted SO with no open lines is vacuously
+	Reserved. Returns (None, False) for a non-submitted SO."""
 	header = _so_header(sales_order)
 	if header.get("docstatus") != 1:
-		return None
+		return None, False
 	own = get_open_so_items({"sales_order": sales_order})
 	if not own:
-		return _resolve_material_status(
-			header,
+		needs_attention = _needs_attention(header)
+		status = _resolve_material_status(
 			{"ready": True, "coverable": True},
 			True,
+			needs_attention,
 			sales_order in _cancelled_sre_sos([sales_order]),
 			False,
 		)
+		return status, needs_attention
 	so_items = get_open_so_items({"item_codes": list({r.item_code for r in own})})
-	return _resolve_statuses(so_items).get(sales_order)
+	return _resolve_statuses(so_items).get(sales_order, (None, False))
+
+
+def compute_material_status(sales_order):
+	"""Correct single-SO Material Status text (no persist), for introspection.
+	Expands to the SO's item cluster so priority availability sees competing peers."""
+	return _resolve_single(sales_order)[0]
 
 
 def _recompute_cluster(sales_order):
-	"""Persist Material Status for `sales_order` AND every open SO sharing an FG
-	item with it - a reservation / dispatch-date change reshuffles same-item peers'
-	priority availability. No-op if the field isn't installed."""
+	"""Persist Material Status + Needs-Attention for `sales_order` AND every open SO
+	sharing an FG item with it - a reservation / dispatch-date change reshuffles
+	same-item peers' priority availability. No-op if the field isn't installed."""
 	if not frappe.db.has_column("Sales Order", MATERIAL_STATUS_FIELD):
 		return
 	own = get_open_so_items({"sales_order": sales_order})
 	if not own:
 		# No open lines: nothing competes; resolve this SO alone.
-		_write_status(sales_order, compute_material_status(sales_order))
+		status, needs_attention = _resolve_single(sales_order)
+		_write_status(sales_order, status, needs_attention)
 		return
 	so_items = get_open_so_items({"item_codes": list({r.item_code for r in own})})
 	_persist_statuses(so_items)

@@ -19,7 +19,8 @@
   {"fieldname": "lead_time", "fieldtype": "Int", "label": "Lead Time (Days)"},
   {"fieldname": "required_by", "fieldtype": "Date", "label": "Required By"},
   {"fieldname": "vendor", "fieldtype": "Link", "options": "Supplier", "label": "Vendor", "in_list_view": 1, "columns": 1},
-  {"fieldname": "approve", "fieldtype": "Check", "label": "Approve", "in_list_view": 1, "columns": 1, "allow_on_submit": 1, "default": "0"}
+  {"fieldname": "approve", "fieldtype": "Check", "label": "Approve", "in_list_view": 1, "columns": 1, "allow_on_submit": 1, "default": "0"},
+  {"fieldname": "purchase_order", "fieldtype": "Link", "options": "Purchase Order", "label": "Purchase Order", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "columns": 1, "description": "The draft Purchase Order this approved line was generated into (set by 'Create Purchase Orders')."}
  ],
  "permissions": []
 }

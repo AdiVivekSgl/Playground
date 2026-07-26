@@ -21,8 +21,11 @@ Flow:
      automatically. Status: Draft -> (submit) Pending Approval -> Approved /
      Partially Approved as lines are ticked (approve is allow_on_submit).
 
-Downstream generation of Material Requests / Purchase Orders from the approved
-lines is a deliberate next step, not built here.
+Downstream generation of Purchase Orders from the approved lines is done by
+`create_purchase_orders`: approved lines are grouped by vendor and one draft PO
+is raised per vendor. Each contributing line records its PO in `purchase_order`,
+so the action is idempotent - re-running only picks up newly approved lines.
+Approved lines with no vendor cannot go on a PO and are reported back as skipped.
 """
 
 from io import BytesIO
@@ -30,7 +33,7 @@ from io import BytesIO
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import cint, flt, now_datetime
+from frappe.utils import add_days, cint, flt, getdate, now_datetime, nowdate
 
 
 class PurchaseAuthorizationSheet(Document):
@@ -103,9 +106,9 @@ APPROVED_SHEET = "Approved for Purchase"
 
 @frappe.whitelist()
 def populate_from_excel(docname):
-	"""Read the attached workbook's "Approved for Purchase" sheet (Item, Qty) and
-	rebuild the item table, enriching each line from ERPNext masters. Returns
-	{added, skipped}."""
+	"""Read the attached workbook's "Approved for Purchase" sheet (Item, Qty, and
+	optionally Vendor) and rebuild the item table, enriching each line from ERPNext
+	masters. Returns {added, skipped}."""
 	doc = frappe.get_doc("Purchase Authorization Sheet", docname)
 	doc.check_permission("write")
 	if not doc.upload_excel:
@@ -225,3 +228,73 @@ def _stock(item_code):
 
 def _default_supplier(item_code):
 	return frappe.db.get_value("Item Default", {"parent": item_code}, "default_supplier")
+
+
+# --------------------------------------------------------------------------- #
+# Approved lines -> draft Purchase Orders (grouped by vendor)
+# --------------------------------------------------------------------------- #
+
+
+@frappe.whitelist()
+def create_purchase_orders(docname):
+	"""Raise one draft Purchase Order per vendor from the approved, not-yet-ordered
+	lines. Each contributing line records the PO in `purchase_order` (so a re-run
+	only picks up newly approved lines). Returns
+	{created: [po...], skipped: [{item, reason}...]}."""
+	if not frappe.has_permission("Purchase Order", "create"):
+		frappe.throw(_("You are not permitted to create Purchase Orders."), frappe.PermissionError)
+
+	doc = frappe.get_doc("Purchase Authorization Sheet", docname)
+	doc.check_permission("read")
+	if doc.docstatus != 1:
+		frappe.throw(_("Submit the sheet and approve lines before creating Purchase Orders."))
+
+	# Group eligible lines by vendor; collect the reasons for anything left out.
+	by_vendor = {}
+	skipped = []
+	for d in doc.items:
+		if not d.approve:
+			continue
+		if d.purchase_order:
+			skipped.append({"item": d.item_code, "reason": _("Already on {0}").format(d.purchase_order)})
+			continue
+		if flt(d.to_purchase) <= 0:
+			skipped.append({"item": d.item_code, "reason": _("Nothing to purchase")})
+			continue
+		if not d.vendor:
+			skipped.append({"item": d.item_code, "reason": _("No vendor")})
+			continue
+		by_vendor.setdefault(d.vendor, []).append(d)
+
+	if not by_vendor:
+		return {"created": [], "skipped": skipped}
+
+	created = []
+	for vendor, lines in by_vendor.items():
+		po = frappe.new_doc("Purchase Order")
+		po.supplier = vendor
+		po.company = doc.company
+		po.transaction_date = nowdate()
+		po.schedule_date = _schedule_date(lines[0])
+		for d in lines:
+			po.append("items", {
+				"item_code": d.item_code,
+				"qty": flt(d.to_purchase),
+				"uom": d.uom,
+				"rate": flt(d.rate),
+				"schedule_date": _schedule_date(d),
+			})
+		po.insert()  # draft; reviewer submits it
+
+		for d in lines:
+			d.db_set("purchase_order", po.name, update_modified=False)
+		created.append(po.name)
+
+	return {"created": created, "skipped": skipped}
+
+
+def _schedule_date(row):
+	"""Required-by date for a PO line: the line's Required By, else today + lead time."""
+	if row.required_by:
+		return getdate(row.required_by)
+	return add_days(nowdate(), cint(row.lead_time))

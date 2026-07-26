@@ -17,11 +17,12 @@ const SALES_STATUS_OPTIONS = [
 	"Urgent",
 ];
 
-// Playground's own 3-sheet workbook (FGSRM view / FG Requirement / RM Component
-// Shortage) for a created Production Plan. Separate from frontec's MR Hierarchy
-// Excel, which is left untouched and still available from the plan form.
-const FGSRM_MR_EXCEL_METHOD =
-	"playground.playground.production_plan_mr_excel.download_fgsrm_mr_excel";
+// The unified 4-sheet planning workbook (FG Reservation Status / Production
+// Requirement / Item Requirement (BOM Levels) / Approved for Purchase). Its last
+// sheet uploads straight into the Purchase Authorization Sheet. Downloaded from
+// FGSRM with the report's own filters driving sheets 1-2.
+const UNIFIED_WORKBOOK_METHOD =
+	"playground.playground.unified_planning_workbook.download_unified_planning_workbook";
 
 // Per-user manual requirements (FGSRM Manual Requirement) - free-form or
 // cherry-picked from open Blanket Orders / Quotations. See fgsrm_manual_requirement.py.
@@ -32,8 +33,10 @@ const FGSRM_MR_METHOD_PATH = "playground.playground.fgsrm_manual_requirement";
 // from an async callback; the attachment Content-Disposition means the browser
 // downloads instead of opening a tab. Passes the current FGSRM filters so the
 // workbook's "FGSRM" sheet reflects the same view that produced the plan.
-function fgsrm_download_mr_excel(pp_name, filters_json) {
-	let url = `/api/method/${FGSRM_MR_EXCEL_METHOD}?name=${encodeURIComponent(pp_name)}`;
+// Download the unified 4-sheet planning workbook for a created plan, passing the
+// current FGSRM filters so sheets 1-2 reflect the view that produced the plan.
+function fgsrm_download_unified_workbook(pp_name, filters_json) {
+	let url = `/api/method/${UNIFIED_WORKBOOK_METHOD}?plan=${encodeURIComponent(pp_name)}`;
 	if (filters_json) url += `&filters=${encodeURIComponent(filters_json)}`;
 	const a = document.createElement("a");
 	a.href = url;
@@ -1106,7 +1109,7 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 			__("Create Prodn Plan"),
 			() => {
 				frappe.confirm(
-					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the Production Plan workbook — no need to open the plan."),
+					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the unified planning workbook — no need to open the plan."),
 					() => {
 						frappe.call({
 							method: `${FGSRM_METHOD_PATH}.create_production_plan_from_suggested_prodn`,
@@ -1118,23 +1121,24 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 								if (!m || !m.name) return;
 								if (m.handed_off) {
 									// Success: chain + raw materials are built, so the
-									// MR Hierarchy workbook is meaningful — download it
-									// straight away and stay on the report.
+									// unified workbook (incl. the BOM-level and purchase
+									// sheets) is meaningful — download it straight away
+									// and stay on the report.
 									frappe.show_alert({
-										message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading Production Plan workbook…", [
+										message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading unified planning workbook…", [
 											m.name,
 											m.items,
 											m.raw_materials,
 										]),
 										indicator: "green",
 									});
-									fgsrm_download_mr_excel(m.name, JSON.stringify(frappe.query_report.get_filter_values()));
+									fgsrm_download_unified_workbook(m.name, JSON.stringify(frappe.query_report.get_filter_values()));
 								} else {
 									// Chain didn't build (frontec hand-off unavailable
 									// or errored) — the workbook would be incomplete, so
 									// send the user to the draft to finish it manually.
 									frappe.show_alert({
-										message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the Production Plan workbook.", [
+										message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the unified planning workbook.", [
 											m.name,
 											m.items,
 										]),

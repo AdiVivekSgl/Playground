@@ -3,8 +3,12 @@
 
 const WPS_CREATE_PLAN_METHOD =
 	"playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager.create_production_plan_from_snapshot";
-const WPS_MR_EXCEL_METHOD =
-	"playground.playground.production_plan_mr_excel.download_fgsrm_mr_excel";
+// The unified 4-sheet planning workbook (FG Reservation Status / Production
+// Requirement / Item Requirement (BOM Levels) / Approved for Purchase). Its last
+// sheet uploads straight into the Purchase Authorization Sheet. Downloaded from a
+// snapshot with this snapshot driving sheets 1-2 (incl. Committed Prodn + Buffer).
+const UNIFIED_WORKBOOK_METHOD =
+	"playground.playground.unified_planning_workbook.download_unified_planning_workbook";
 
 function wps_esc(v) {
 	return frappe.utils.escape_html(v == null ? "" : String(v));
@@ -30,9 +34,11 @@ function wps_money0(v) {
 	return format_number(val, null, 0);
 }
 
-function wps_download_mr_excel(pp_name) {
+function wps_download_unified_workbook(pp_name, snapshot) {
+	let url = `/api/method/${UNIFIED_WORKBOOK_METHOD}?plan=${encodeURIComponent(pp_name)}`;
+	if (snapshot) url += `&snapshot=${encodeURIComponent(snapshot)}`;
 	const a = document.createElement("a");
-	a.href = `/api/method/${WPS_MR_EXCEL_METHOD}?name=${encodeURIComponent(pp_name)}`;
+	a.href = url;
 	a.target = "_blank";
 	a.rel = "noopener";
 	document.body.appendChild(a);
@@ -359,7 +365,7 @@ function wps_allocate(frm, item_code, new_total) {
 // ─────────────────────────────────────────────────────────────────────────
 function wps_create_prodn_plan(frm) {
 	frappe.confirm(
-		__("Create a draft Production Plan from this snapshot's itemwise Committed Prodn? It builds the full nested plan chain and raw materials, then downloads the Production Plan workbook. Save any edits first."),
+		__("Create a draft Production Plan from this snapshot's itemwise Committed Prodn? It builds the full nested plan chain and raw materials, then downloads the unified planning workbook. Save any edits first."),
 		() => {
 			frappe.call({
 				method: WPS_CREATE_PLAN_METHOD,
@@ -371,14 +377,14 @@ function wps_create_prodn_plan(frm) {
 					if (!m || !m.name) return;
 					if (m.handed_off) {
 						frappe.show_alert({
-							message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading workbook…", [
+							message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading unified planning workbook…", [
 								m.name,
 								m.items,
 								m.raw_materials,
 							]),
 							indicator: "green",
 						});
-						wps_download_mr_excel(m.name);
+						wps_download_unified_workbook(m.name, frm.doc.name);
 					} else {
 						frappe.show_alert({
 							message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the workbook.", [

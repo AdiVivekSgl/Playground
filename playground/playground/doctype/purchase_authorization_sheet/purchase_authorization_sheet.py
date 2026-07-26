@@ -10,10 +10,12 @@ Purchase Orders: rather than approving individual POs, management approves the
 purchase requirement line by line.
 
 Flow:
-  1. Create a PAS, attach the MR Hierarchy workbook, click "Populate from Excel"
-     -> its "Approved for Purchase" sheet (Item, Qty) fills the item table, each
-     row enriched from ERPNext (description, stock, reserved, rate, value,
-     vendor, lead time).
+  1. Create a PAS, attach the workbook, click "Populate from Excel" -> its
+     "Approved for Purchase" sheet (Item, Qty, and optionally Vendor) fills the
+     item table, each row enriched from ERPNext (description, stock, reserved,
+     rate, value, lead time). Vendor is taken from the sheet when it names a real
+     Supplier, else the item's default supplier; either way it stays editable
+     (Select any Supplier) in the form afterwards.
   2. Review and tick "Approve" per line (line-wise authorization).
   3. Summary (totals, approved value, cash requirement, ...) and Status recompute
      automatically. Status: Draft -> (submit) Pending Approval -> Approved /
@@ -115,21 +117,27 @@ def populate_from_excel(docname):
 
 	doc.set("items", [])
 	skipped = []
-	for item_code, qty in rows:
-		if not item_code or flt(qty) <= 0:
+	for r in rows:
+		item_code = r["item_code"]
+		if not item_code or flt(r["qty"]) <= 0:
 			continue
 		if not frappe.db.exists("Item", item_code):
 			skipped.append(item_code)
 			continue
-		doc.append("items", _build_item_row(item_code, flt(qty)))
+		doc.append("items", _build_item_row(item_code, flt(r["qty"]), r.get("vendor")))
 
 	doc.save()
 	return {"added": len(doc.items), "skipped": skipped}
 
 
 def _read_approved_sheet(file_url):
-	"""[(item, qty), ...] from column A/B of the "Approved for Purchase" sheet,
-	skipping the header row."""
+	"""[{"item_code", "qty", "vendor"}, ...] from the "Approved for Purchase" sheet.
+
+	Columns are located by header label (case-insensitive) so the sheet can carry
+	extra columns in any order: "Item"/"Item Code" -> item, "Qty"/"Quantity" ->
+	qty, "Vendor"/"Supplier" -> vendor. Falls back to the legacy positional layout
+	(column A = item, column B = qty, no vendor) when those headers aren't found -
+	so an older sheet still imports. The header row and any "Total" row are skipped."""
 	import openpyxl
 	from frappe.utils.file_manager import get_file
 
@@ -145,18 +153,35 @@ def _read_approved_sheet(file_url):
 		frappe.throw(_("The uploaded file has no '{0}' sheet.").format(APPROVED_SHEET))
 
 	rows = []
+	item_col, qty_col, vendor_col = 0, 1, None  # legacy positional defaults
 	for i, row in enumerate(target.iter_rows(values_only=True)):
-		if i == 0 or not row:
-			continue  # header / blank
-		item = str(row[0]).strip() if row[0] is not None else ""
-		qty = row[1] if len(row) > 1 else None
+		if i == 0:
+			# Locate columns by header label; keep positional defaults if absent.
+			header = {
+				str(v).strip().lower(): idx
+				for idx, v in enumerate(row or [])
+				if v is not None and str(v).strip()
+			}
+			item_col = header.get("item", header.get("item code", 0))
+			qty_col = header.get("qty", header.get("quantity", 1))
+			vendor_col = header.get("vendor", header.get("supplier"))
+			continue
+		if not row:
+			continue
+		item = str(row[item_col]).strip() if item_col < len(row) and row[item_col] is not None else ""
+		qty = row[qty_col] if qty_col < len(row) else None
+		vendor = (
+			str(row[vendor_col]).strip()
+			if vendor_col is not None and vendor_col < len(row) and row[vendor_col] is not None
+			else None
+		)
 		if not item or item.lower() == "total":
 			continue
-		rows.append((item, qty))
+		rows.append({"item_code": item, "qty": qty, "vendor": vendor or None})
 	return rows
 
 
-def _build_item_row(item_code, qty):
+def _build_item_row(item_code, qty, vendor=None):
 	it = frappe.get_cached_value(
 		"Item", item_code, ["item_name", "stock_uom", "valuation_rate", "lead_time_days"], as_dict=True
 	) or frappe._dict()
@@ -173,9 +198,18 @@ def _build_item_row(item_code, qty):
 		"rate": rate,
 		"value": qty * rate,
 		"lead_time": cint(it.lead_time_days),
-		"vendor": _default_supplier(item_code),
+		"vendor": _resolve_vendor(vendor, item_code),
 		"approve": 0,
 	}
+
+
+def _resolve_vendor(vendor, item_code):
+	"""Prefer the vendor named in the upload when it's a real Supplier; otherwise
+	fall back to the item's default supplier. Either way it stays editable in the
+	form afterwards (the Vendor field is a plain Supplier link)."""
+	if vendor and frappe.db.exists("Supplier", vendor):
+		return vendor
+	return _default_supplier(item_code)
 
 
 def _stock(item_code):

@@ -2,8 +2,8 @@
 # For license information, please see license.txt
 
 """
-Unified Planning Workbook (4 sheets)
-====================================
+Unified Planning Workbook (Cover + 4 sheets)
+============================================
 
 A single workbook the FGSRM report and the Weekly Planning Snapshot both download
 after building a Production Plan. It walks the whole planning story end to end, in
@@ -13,9 +13,15 @@ Purchase Authorization Sheet's "Populate from Excel".
 The Production Plan form keeps its own existing download (frontec's MR Hierarchy
 Excel) untouched - this workbook is the FGSRM/WPS-side artifact only.
 
-Sheets (each shares one grammar: column A = Item Code, column B = Item Name, a
-grey/bold/centred header on row 1, Float qty / Currency value, a bold TOTAL row):
+Sheets (the four data sheets share one grammar: column A = Item Code, column B =
+Item Name, a grey/bold/centred header on row 1, Float qty / Currency value, a bold
+TOTAL row):
 
+  0. "Cover"                        - the report title (which differs by origin -
+                                       "Shortage Against 4 Week Production" from
+                                       FGSRM, "Urgent Shortage Against Weekly
+                                       Commitment" from WPS), a reference to the
+                                       origin document, and a generated-on stamp.
   1. "FG Reservation Status"        - the full FGSRM picture per open SO line:
                                        Requirements (Pending / Short), Reservations
                                        (Reserved / Total / by customer), Availability
@@ -51,7 +57,17 @@ from io import BytesIO
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate
+from frappe.utils import (
+    cint,
+    flt,
+    format_datetime,
+    formatdate,
+    get_fullname,
+    get_url,
+    get_url_to_form,
+    getdate,
+    now_datetime,
+)
 
 from playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager import (
     execute as fgsrm_execute,
@@ -71,7 +87,8 @@ _HEADER_FILL = "D3D3D3"
 
 @frappe.whitelist()
 def download_unified_planning_workbook(plan, filters=None, snapshot=None):
-    """Stream the 4-sheet unified workbook for Production Plan `plan`.
+    """Stream the unified workbook for Production Plan `plan`: a Cover sheet
+    followed by the four planning sheets.
 
     Exactly one of `filters` (FGSRM entry point) or `snapshot` (WPS entry point)
     is expected for sheets 1-2; sheets 2B/3/4 always come from the plan chain.
@@ -98,6 +115,7 @@ def download_unified_planning_workbook(plan, filters=None, snapshot=None):
     lines = _planning_lines(filters, snapshot)
     committed_by_item = _plan_committed_by_item(plan)
 
+    _build_cover_sheet(wb, plan, filters, snapshot)
     _build_fg_status_sheet(wb, lines)
     _build_production_requirement_sheet(wb, lines, committed_by_item)
     _build_bom_levels_sheet(wb, plan)
@@ -109,6 +127,135 @@ def download_unified_planning_workbook(plan, filters=None, snapshot=None):
     frappe.response["filename"] = "Unified_Planning_{0}.xlsx".format(str(plan).replace("/", "-"))
     frappe.response["filecontent"] = stream.getvalue()
     frappe.response["type"] = "binary"
+
+
+# --------------------------------------------------------------------------- #
+# Cover sheet
+# --------------------------------------------------------------------------- #
+
+# Human-readable labels for the FGSRM filters listed on the cover; anything not
+# here falls back to a title-cased fieldname.
+_FILTER_LABELS = {
+    "item_code": "Item",
+    "customer": "Customer",
+    "date_basis": "Date Basis",
+    "unreserved_basis": "Unreserved Stock Basis",
+    "view_mode": "View",
+    "only_unreserved": "Only Lines With Unreserved Pending",
+    "group_by_so": "Group by Sales Order",
+    "include_draft": "Include Draft SOs",
+    "from_date": "From Date",
+    "to_date": "To Date",
+}
+
+
+def _build_cover_sheet(wb, plan, filters, snapshot):
+    """First sheet: the report title (which differs by origin), a hyperlinked
+    reference to the origin document and the Production Plan, and a generated-on
+    timestamp.
+
+      - From WPS   -> "Urgent Shortage Against Weekly Commitment", origin = the
+                      Weekly Planning Snapshot (with its snapshot date).
+      - From FGSRM -> "Shortage Against 4 Week Production", origin = the FG Stock
+                      Reservation Manager report view, with its filters listed.
+
+    Origin Document and Production Plan cells hyperlink to their desk forms (the
+    FGSRM origin links to the report); links resolve against the site's own URL."""
+    from openpyxl.styles import Alignment, Font
+
+    ws = wb.create_sheet("Cover")
+    is_wps = bool(snapshot)
+    title = (
+        _("Urgent Shortage Against Weekly Commitment")
+        if is_wps
+        else _("Shortage Against 4 Week Production")
+    )
+
+    # Title band, merged across the key/value columns.
+    ws.merge_cells("A1:B1")
+    c = ws.cell(1, 1, title)
+    c.font = Font(bold=True, size=16)
+    c.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 30
+
+    label_font = _bold()
+    link_font = Font(color="0563C1", underline="single")
+
+    def _kv(row, label, value, url=None):
+        lc = ws.cell(row, 1, label)
+        lc.font = label_font
+        vc = ws.cell(row, 2, value)
+        if url:
+            vc.hyperlink = url
+            vc.font = link_font
+
+    r = 3
+    if is_wps:
+        _kv(r, _("Source"), _("Weekly Planning Snapshot")); r += 1
+        _kv(r, _("Origin Document"), snapshot, get_url_to_form("Weekly Planning Snapshot", snapshot)); r += 1
+        snap_date = frappe.db.get_value("Weekly Planning Snapshot", snapshot, "snapshot_date")
+        if snap_date:
+            _kv(r, _("Snapshot Date"), formatdate(snap_date)); r += 1
+    else:
+        _kv(r, _("Source"), _("FG Stock Reservation Manager")); r += 1
+        _kv(
+            r,
+            _("Origin Document"),
+            _("FG Stock Reservation Manager (report view)"),
+            get_url("/app/query-report/FG Stock Reservation Manager"),
+        ); r += 1
+
+    _kv(r, _("Production Plan"), plan, get_url_to_form("Production Plan", plan)); r += 1
+    _kv(r, _("Generated On"), format_datetime(now_datetime())); r += 1
+    _kv(r, _("Prepared By"), get_fullname(frappe.session.user)); r += 1
+
+    # FGSRM filters that produced the view.
+    if not is_wps:
+        r += 1
+        ws.cell(r, 1, _("Filters Applied")).font = label_font
+        r += 1
+        applied = _humanize_filters(filters)
+        if applied:
+            for label, value in applied:
+                _kv(r, label, value); r += 1
+        else:
+            ws.cell(r, 1, _("(none — full open-order view)")); r += 1
+
+    # Contents index.
+    r += 1
+    ws.cell(r, 1, _("Contents")).font = label_font
+    r += 1
+    for name in (
+        _("1. FG Reservation Status"),
+        _("2. Production Requirement"),
+        _("3. Item Requirement (BOM Levels)"),
+        _("4. Approved for Purchase"),
+    ):
+        ws.cell(r, 1, name); r += 1
+
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 52
+
+
+def _humanize_filters(filters):
+    """[(label, value), ...] for the non-empty FGSRM filters, so the cover shows
+    exactly the view that produced the plan. Off/blank/zero values are omitted;
+    checkbox-style truthy values render as 'Yes'; lists are comma-joined."""
+    out = []
+    for key, value in (filters or {}).items():
+        if isinstance(value, (list, tuple)):
+            if not value:
+                continue
+            shown = ", ".join(str(v) for v in value)
+        elif value in (None, "", 0, "0", False):
+            continue
+        elif value in (1, "1", True):
+            shown = _("Yes")
+        else:
+            shown = str(value)
+        label = _(_FILTER_LABELS.get(key) or key.replace("_", " ").title())
+        out.append((label, shown))
+    return out
 
 
 # --------------------------------------------------------------------------- #

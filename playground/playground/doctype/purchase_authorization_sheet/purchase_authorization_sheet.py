@@ -137,10 +137,17 @@ def _read_approved_sheet(file_url):
 	"""[{"item_code", "qty", "vendor"}, ...] from the "Approved for Purchase" sheet.
 
 	Columns are located by header label (case-insensitive) so the sheet can carry
-	extra columns in any order: "Item"/"Item Code" -> item, "Qty"/"Quantity" ->
-	qty, "Vendor"/"Supplier" -> vendor. Falls back to the legacy positional layout
-	(column A = item, column B = qty, no vendor) when those headers aren't found -
-	so an older sheet still imports. The header row and any "Total" row are skipped."""
+	extra columns in any order:
+	  - "Item"/"Item Code"        -> item;
+	  - "Short Qty" + "Buffer"    -> purchase qty = Short Qty + Buffer. This is the
+	    current unified-workbook layout: both are static numbers, so summing them
+	    here is robust to Excel not caching the "Total Qty" formula. A blank Buffer
+	    counts as 0, so an untouched sheet still imports the Short Qty.
+	  - "Qty"/"Quantity"          -> purchase qty (older/frontec layout), used when
+	    there is no "Short Qty" column;
+	  - "Vendor"/"Supplier"       -> vendor.
+	Falls back to the legacy positional layout (column A = item, column B = qty) when
+	none of those headers are found. The header row and any "Total" row are skipped."""
 	import openpyxl
 	from frappe.utils.file_manager import get_file
 
@@ -155,8 +162,17 @@ def _read_approved_sheet(file_url):
 	if target is None:
 		frappe.throw(_("The uploaded file has no '{0}' sheet.").format(APPROVED_SHEET))
 
+	def _num(row, col):
+		if col is None or col >= len(row) or row[col] is None:
+			return 0.0
+		try:
+			return flt(row[col])
+		except (TypeError, ValueError):
+			return 0.0
+
 	rows = []
 	item_col, qty_col, vendor_col = 0, 1, None  # legacy positional defaults
+	short_col = buffer_col = None
 	for i, row in enumerate(target.iter_rows(values_only=True)):
 		if i == 0:
 			# Locate columns by header label; keep positional defaults if absent.
@@ -167,19 +183,26 @@ def _read_approved_sheet(file_url):
 			}
 			item_col = header.get("item", header.get("item code", 0))
 			qty_col = header.get("qty", header.get("quantity", 1))
+			short_col = header.get("short qty")
+			buffer_col = header.get("buffer")
 			vendor_col = header.get("vendor", header.get("supplier"))
 			continue
 		if not row:
 			continue
 		item = str(row[item_col]).strip() if item_col < len(row) and row[item_col] is not None else ""
-		qty = row[qty_col] if qty_col < len(row) else None
+		if not item or item.lower() == "total":
+			continue
+		# Purchase qty: Short Qty + Buffer when that layout is present, else the
+		# plain Qty column (or legacy column B).
+		if short_col is not None:
+			qty = _num(row, short_col) + _num(row, buffer_col)
+		else:
+			qty = _num(row, qty_col)
 		vendor = (
 			str(row[vendor_col]).strip()
 			if vendor_col is not None and vendor_col < len(row) and row[vendor_col] is not None
 			else None
 		)
-		if not item or item.lower() == "total":
-			continue
 		rows.append({"item_code": item, "qty": qty, "vendor": vendor or None})
 	return rows
 

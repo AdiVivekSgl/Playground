@@ -2,7 +2,7 @@
 # For license information, please see license.txt
 
 """
-Unified Planning Workbook (Cover + 6 sheets)
+Unified Planning Workbook (Cover + 5 sheets)
 ============================================
 
 A single workbook the FGSRM report and the Weekly Planning Snapshot both download
@@ -34,30 +34,27 @@ are in-cell formulas so the workbook stays live when edited):
                                        Suggested, Committed Prodn (the plan's own
                                        root po_items, authoritative for both entry
                                        points, so it reconciles with sheets 4-6).
-  4. "Item Requirement (BOM Levels)"- the nested plan chain exploded across every
-                                       BOM level: Qty As Per BOM, live WO Qty
-                                       formula, Plan to Request, stock/ordered,
-                                       Short QTY.
-  5. "Item Requirement (logic)"     - EXPERIMENTAL restatement of sheet 4 that makes
-                                       each shortage's provenance explicit (rows
-                                       reference sheet 4 by cell). Adds two fetched
-                                       columns - Reserved against Open WO, Projected
-                                       Incoming from Open WO - and a Shortage formula.
-                                       Kept beside sheet 4 to validate the logic.
-  6. "Approved for Purchase"        - the summary buy-list: purchasable items netted
-                                       once against stock + pending POs. Column A = Item,
-                                       column B = Qty exactly as the PAS reader expects
-                                       (`purchase_authorization_sheet._read_approved_sheet`);
-                                       columns C+ are enrichment (Vendor is picked up
-                                       by the reader's header-aware column lookup).
+  4. "Item Requirement"             - the nested plan chain exploded across every BOM
+                                       level, with each shortage's provenance made
+                                       explicit. Two fetched columns (Reserved against
+                                       Open WO, Projected Incoming from Open WO) plus a
+                                       Shortage formula:
+                                         Shortage = MAX(0, Qty As Per BOM − Qty In Stock
+                                           − Projected Incoming − Ordered + Reserved).
+  5. "Approved for Purchase"        - the buy-list: purchasable items' shortage
+                                       aggregated once per item, with a manual Buffer
+                                       column (Total Qty = Short Qty + Buffer). Column
+                                       A = Item; the PAS reader takes the purchase qty
+                                       as Short Qty + Buffer and picks up Vendor by
+                                       header (`purchase_authorization_sheet._read_approved_sheet`).
 
 Data sources by entry point:
   - From FGSRM: `filters` (the report's filter JSON) drives sheets 1-3; the plan
-    `name` drives sheets 3-6. Committed at the line level mirrors Suggested (the
+    `name` drives sheets 3-5. Committed at the line level mirrors Suggested (the
     plan was built from Suggested), and sheet 3 / the plan reconcile it item-wise.
   - From WPS:   `snapshot` (the Weekly Planning Snapshot name) drives sheets 1-3
     from the frozen lines incl. Committed Prodn and Buffer rows; the plan `name`
-    drives sheets 3-6.
+    drives sheets 3-5.
 
 Built with openpyxl (bundled with Frappe) and streamed via frappe.response.
 """
@@ -86,7 +83,7 @@ from playground.playground.report.production_requirement_report.production_requi
 )
 
 APPROVED_SHEET = "Approved for Purchase"  # must match purchase_authorization_sheet.APPROVED_SHEET
-BOM_SHEET = "Item Requirement (BOM Levels)"  # the Logic sheet references this one by cell
+ITEM_REQUIREMENT_SHEET = "Item Requirement"  # the default item-requirement view
 
 # frontec's parent-plan link that chains the nested Production Plans (used to walk
 # the plan chain for sheets 3-4).
@@ -124,17 +121,15 @@ def download_unified_planning_workbook(plan, filters=None, snapshot=None):
 
     lines = _planning_lines(filters, snapshot)
     committed_by_item = _plan_committed_by_item(plan)
-    # Built once and shared, so the BOM-Levels, Logic and Approved sheets all
-    # sit on the same rows in the same order (the Logic sheet references the
-    # BOM-Levels sheet by row number).
+    # The nested-chain Material Request Plan Items - shared by the Item Requirement
+    # and Approved sheets.
     mr_rows = _collect_mr_rows(_build_chain(plan))
 
     _build_cover_sheet(wb, plan, filters, snapshot)
     _build_fg_status_sheet(wb, lines)
     _build_production_requirement_sheet(wb, lines)
     _build_consolidated_requirement_sheet(wb, lines, committed_by_item)
-    _build_bom_levels_sheet(wb, mr_rows)
-    _build_logic_sheet(wb, mr_rows)
+    _build_item_requirement_sheet(wb, mr_rows)
     _build_approved_for_purchase_sheet(wb, mr_rows)
 
     stream = BytesIO()
@@ -245,9 +240,8 @@ def _build_cover_sheet(wb, plan, filters, snapshot):
         _("1. FG Reservation Status"),
         _("2. Production Requirement"),
         _("3. Consolidated Requirement"),
-        _("4. Item Requirement (BOM Levels)"),
-        _("5. Item Requirement (logic)"),
-        _("6. Approved for Purchase"),
+        _("4. Item Requirement"),
+        _("5. Approved for Purchase"),
     ):
         ws.cell(r, 1, name); r += 1
 
@@ -552,90 +546,33 @@ def _build_consolidated_requirement_sheet(wb, lines, committed_by_item):
 
 
 # --------------------------------------------------------------------------- #
-# Sheet 4 - Item Requirement (BOM Levels)  [nested-chain raw-material shortage]
+# Sheet 4 - Item Requirement  [nested-chain shortage, provenance-explicit]
 # --------------------------------------------------------------------------- #
 
-def _build_bom_levels_sheet(wb, mr_rows):
-    ws = wb.create_sheet(BOM_SHEET)
+def _build_item_requirement_sheet(wb, mr_rows):
+    """The nested plan chain exploded across every BOM level, restated so each
+    shortage's provenance is explicit:
+
+        Shortage = MAX(0, Qty As Per BOM − Qty In Stock − Projected Incoming from
+                          Open WO − Incoming Purchase (Ordered Qty)
+                          + Reserved against Open WO)
+
+    Reserved against Open WO and Projected Incoming from Open WO are fetched from
+    open Work Orders (see the two _*_open_wo_map helpers); everything else comes
+    off the Material Request Plan Items. This is the default item-requirement view
+    (it replaced the former separate "BOM Levels" + "logic" pair once the logic was
+    validated). Only the Shortage column is a live formula, so the two fetched
+    columns can be reviewed/overridden by hand."""
+    ws = wb.create_sheet(ITEM_REQUIREMENT_SHEET)
     headers = [
-        "Item Code",            # A
-        "Type",                 # B
-        "Explosion Lvl",        # C
-        "Qty As Per BOM",       # D
-        "WO Qty",               # E  (in-cell formula, below)
-        "Plan to Request Qty",  # F
-        "Safety Stock",         # G
-        "Minimum Order Qty",    # H
-        "Qty In Stock",         # I
-        "Ordered Qty",          # J
-        "Short QTY",            # K  (static computed: max(0, qty - in-stock - pending PO))
-    ]
-    _write_header(ws, headers)
-
-    if not mr_rows:
-        _autosize(ws, headers)
-        return
-
-    item_codes = sorted({r["item_code"] for r in mr_rows})
-    po_pending = _pending_po_map(item_codes)      # J: outstanding PO qty
-    min_oqty = _item_field_map(item_codes, "min_order_qty")
-    safety = _item_field_map(item_codes, "safety_stock")
-
-    r = 2  # data starts at row 2 (headers on row 1)
-    for row in mr_rows:
-        item = row["item_code"]
-        qty = flt(row.get("quantity"))                 # Plan to Request Qty
-        bom_qty = flt(row.get("required_bom_qty"))     # Qty As Per BOM
-        actual_qty = flt(row.get("actual_qty"))        # Qty In Stock
-        pending_po = flt(po_pending.get(item))         # Ordered Qty
-        short_qty = max(0.0, qty - actual_qty - pending_po)
-
-        ws.cell(r, 1, item)
-        ws.cell(r, 2, row.get("material_request_type"))
-        ws.cell(r, 3, row["_level"])
-        ws.cell(r, 4, bom_qty)
-        # E "WO Qty" - live formula: =MIN(0, PlanToRequest + QtyInStock + OrderedQty − QtyAsPerBOM)
-        ws.cell(r, 5, "=MIN(0,(F{r}+I{r}+J{r}-D{r}))".format(r=r))
-        ws.cell(r, 6, qty)
-        ws.cell(r, 7, flt(safety.get(item)))
-        ws.cell(r, 8, flt(min_oqty.get(item)))
-        ws.cell(r, 9, actual_qty)
-        ws.cell(r, 10, pending_po)
-        ws.cell(r, 11, short_qty)
-        r += 1
-
-    _autosize(ws, headers)
-
-
-# --------------------------------------------------------------------------- #
-# Sheet 5 - Item Requirement (logic)  [experimental, kept beside the std sheet]
-# --------------------------------------------------------------------------- #
-
-def _build_logic_sheet(wb, mr_rows):
-    """Experimental restatement of the BOM-level requirement that makes each
-    shortage's provenance explicit. Its rows mirror the "Item Requirement (BOM
-    Levels)" sheet one-for-one (same order) - Item / Type / Level / Qty As Per BOM
-    / Qty In Stock / Ordered Qty are pulled from it by cell reference so the two
-    stay linked - and it adds two fetched columns that show what a line is blocked
-    against and what is already coming:
-
-        Shortage = MAX(0, Qty As Per BOM − Qty In Stock − Reserved against Open WO
-                          + Projected Incoming from Open WO + Ordered Qty)
-
-    Kept side by side with the standard sheet for a few weeks to validate the
-    logic before it (potentially) replaces it - so the exact definition of the two
-    fetched columns is deliberately easy to change (see the two _*_open_wo_map
-    helpers)."""
-    ws = wb.create_sheet("Item Requirement (logic)")
-    headers = [
-        "Item Code",                        # A  (= BOM!A)
-        "Type",                             # B  (= BOM!B)
-        "Explosion Lvl",                    # C  (= BOM!C)
-        "Qty As Per BOM",                   # D  (= BOM!D)
-        "Qty In Stock",                     # E  (= BOM!I)
+        "Item Code",                        # A
+        "Type",                             # B
+        "Explosion Lvl",                    # C
+        "Qty As Per BOM",                   # D
+        "Qty In Stock",                     # E
         "Reserved against Open WO",         # F  (fetched)
         "Projected Incoming from Open WO",  # G  (fetched)
-        "Incoming Purchase (Ordered Qty)",  # H  (= BOM!J)
+        "Incoming Purchase (Ordered Qty)",  # H
         "Shortage",                         # I  (formula)
     ]
     _write_header(ws, headers)
@@ -645,92 +582,128 @@ def _build_logic_sheet(wb, mr_rows):
         return
 
     item_codes = sorted({r["item_code"] for r in mr_rows})
-    reserved_wo = _reserved_against_open_wo_map(item_codes)
-    incoming_wo = _projected_incoming_from_open_wo_map(item_codes)
+    po_pending = _pending_po_map(item_codes)                        # H: outstanding PO qty
+    reserved_wo = _reserved_against_open_wo_map(item_codes)         # F
+    incoming_wo = _projected_incoming_from_open_wo_map(item_codes)  # G
 
-    bom = "'{0}'".format(BOM_SHEET)  # quoted sheet name for the cross-sheet refs
-    r = 2
+    r = 2  # data starts at row 2 (headers on row 1)
     for row in mr_rows:
         item = row["item_code"]
-        ws.cell(r, 1, "={0}!A{1}".format(bom, r))
-        ws.cell(r, 2, "={0}!B{1}".format(bom, r))
-        ws.cell(r, 3, "={0}!C{1}".format(bom, r))
-        ws.cell(r, 4, "={0}!D{1}".format(bom, r))
-        ws.cell(r, 5, "={0}!I{1}".format(bom, r))
+        ws.cell(r, 1, item)
+        ws.cell(r, 2, row.get("material_request_type"))
+        ws.cell(r, 3, row["_level"])
+        ws.cell(r, 4, flt(row.get("required_bom_qty")))  # Qty As Per BOM
+        ws.cell(r, 5, flt(row.get("actual_qty")))        # Qty In Stock
         ws.cell(r, 6, flt(reserved_wo.get(item)))
         ws.cell(r, 7, flt(incoming_wo.get(item)))
-        ws.cell(r, 8, "={0}!J{1}".format(bom, r))
-        ws.cell(r, 9, "=MAX(0,(D{r}-E{r}-F{r}+G{r}+H{r}))".format(r=r))
+        ws.cell(r, 8, flt(po_pending.get(item)))         # Incoming Purchase (Ordered Qty)
+        # I "Shortage" = MAX(0, QtyAsPerBOM − QtyInStock − ProjectedIncoming − Ordered + Reserved)
+        ws.cell(r, 9, "=MAX(0,(D{r}-E{r}-G{r}-H{r}+F{r}))".format(r=r))
         r += 1
 
     _autosize(ws, headers)
 
 
 # --------------------------------------------------------------------------- #
-# Sheet 6 - Approved for Purchase  [PAS upload: A = Item, B = Qty]
+# Sheet 5 - Approved for Purchase  [PAS upload: A = Item, purchase qty = B + C]
 # --------------------------------------------------------------------------- #
 
 def _build_approved_for_purchase_sheet(wb, mr_rows):
+    """Buy-list derived from the Item Requirement shortage, aggregated ONCE per
+    purchasable item. A manual Buffer column lets the buyer top up each line;
+    Total Qty = Short Qty + Buffer is what the PAS purchases.
+
+    Column A = Item; the PAS reader takes the purchase qty as Short Qty + Buffer
+    (it sums those two static columns, so it is robust to Excel not caching the
+    Total Qty formula), and picks up Vendor by its header."""
     ws = wb.create_sheet(APPROVED_SHEET)
     headers = [
-        "Item",        # A  ← PAS reads item_code from here
-        "Qty",         # B  ← PAS reads the purchase qty from here
-        "UOM",         # C  ── column C on is enrichment; the PAS reader ignores /
-        "Rate",        # D     re-derives it, except Vendor which it picks up by
-        "Value",       # E  (formula: Rate × Qty)   the header-aware column lookup.
-        "Vendor",      # F
-        "Lead Time",   # G
+        "Item",       # A  ← PAS reads item_code
+        "Short Qty",  # B  ← PAS reads (Short Qty + Buffer) as the purchase qty
+        "Buffer",     # C  ← manual top-up, 0 by default
+        "Total Qty",  # D  (formula: Short Qty + Buffer)
+        "UOM",        # E
+        "Rate",       # F
+        "Value",      # G  (formula: Rate × Total Qty)
+        "Vendor",     # H  ← PAS picks this up by header
+        "Lead Time",  # I
     ]
     _write_header(ws, headers)
 
-    # Purchase-type lines only; net each item ONCE against stock + pending POs
-    # (an item can recur across levels, so summing per-row Short QTY would
-    # over-subtract its stock - aggregate Plan to Request first, then net).
-    purchase_items = sorted({r["item_code"] for r in mr_rows if r.get("material_request_type") == "Purchase"})
+    short_by_item = _purchase_shortage_by_item(mr_rows)
+    purchase_items = sorted(k for k, v in short_by_item.items() if v > 0)
     if not purchase_items:
         _autosize(ws, headers)
         return
 
-    plan_req = {}
-    actual_by_item = {}
-    for row in mr_rows:
-        if row.get("material_request_type") != "Purchase":
-            continue
-        item = row["item_code"]
-        plan_req[item] = plan_req.get(item, 0.0) + flt(row.get("quantity"))
-        actual_by_item[item] = flt(row.get("actual_qty"))  # per-item constant
-
-    po_pending = _pending_po_map(purchase_items)
     info = _item_info_map(purchase_items)
     vendors = _default_supplier_map(purchase_items)
 
     r = 2
     first = r
-    tot_qty = 0.0
     for item in purchase_items:
-        net = max(0.0, flt(plan_req.get(item)) - flt(actual_by_item.get(item)) - flt(po_pending.get(item)))
-        if net <= 0:
-            continue
         it = info.get(item) or frappe._dict()
         ws.cell(r, 1, item)
-        ws.cell(r, 2, net)
-        ws.cell(r, 3, it.get("stock_uom"))
-        ws.cell(r, 4, flt(it.get("valuation_rate")))
-        ws.cell(r, 5, "=D{r}*B{r}".format(r=r))  # Value = Rate × Qty
-        ws.cell(r, 6, vendors.get(item))
-        ws.cell(r, 7, cint(it.get("lead_time_days")))
-        tot_qty += net
+        ws.cell(r, 2, flt(short_by_item.get(item)))
+        ws.cell(r, 3, 0)  # Buffer - manual, defaults to 0
+        ws.cell(r, 4, "=B{r}+C{r}".format(r=r))  # Total Qty = Short Qty + Buffer
+        ws.cell(r, 5, it.get("stock_uom"))
+        ws.cell(r, 6, flt(it.get("valuation_rate")))
+        ws.cell(r, 7, "=F{r}*D{r}".format(r=r))  # Value = Rate × Total Qty
+        ws.cell(r, 8, vendors.get(item))
+        ws.cell(r, 9, cint(it.get("lead_time_days")))
         r += 1
 
-    # TOTAL row - the PAS reader skips a row whose column A is "Total", so this is
-    # safe to leave in the upload.
+    # TOTAL row - the PAS reader skips a row whose column A is "Total".
     if r > first:
+        last = r - 1
         _bold_cells(ws, r, {
             1: _("Total"),
-            2: tot_qty,
-            5: "=SUM(E{a}:E{b})".format(a=first, b=r - 1),
+            2: "=SUM(B{a}:B{b})".format(a=first, b=last),
+            4: "=SUM(D{a}:D{b})".format(a=first, b=last),
+            7: "=SUM(G{a}:G{b})".format(a=first, b=last),
         })
     _autosize(ws, headers)
+
+
+def _purchase_shortage_by_item(mr_rows):
+    """{item_code: shortage} for purchasable items, matching the Item Requirement
+    sheet's Shortage aggregated once per item:
+
+        Shortage = max(0, Σ Qty As Per BOM − Qty In Stock − Projected Incoming from
+                          Open WO − Ordered Qty + Reserved against Open WO)
+
+    Qty As Per BOM is summed across the item's Purchase rows (all levels); stock,
+    open-WO supply/reservation and pending POs are per-item constants applied once,
+    so an item recurring across levels is not double-netted."""
+    purchase_items = sorted({r["item_code"] for r in mr_rows if r.get("material_request_type") == "Purchase"})
+    if not purchase_items:
+        return {}
+
+    bom_sum = {}
+    actual = {}
+    for row in mr_rows:
+        if row.get("material_request_type") != "Purchase":
+            continue
+        item = row["item_code"]
+        bom_sum[item] = bom_sum.get(item, 0.0) + flt(row.get("required_bom_qty"))
+        actual[item] = flt(row.get("actual_qty"))  # per-item constant
+
+    po_pending = _pending_po_map(purchase_items)
+    reserved_wo = _reserved_against_open_wo_map(purchase_items)
+    incoming_wo = _projected_incoming_from_open_wo_map(purchase_items)
+
+    out = {}
+    for item in purchase_items:
+        out[item] = max(
+            0.0,
+            flt(bom_sum.get(item))
+            - flt(actual.get(item))
+            - flt(incoming_wo.get(item))
+            - flt(po_pending.get(item))
+            + flt(reserved_wo.get(item)),
+        )
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -792,11 +765,10 @@ def _reserved_against_open_wo_map(items):
     Work Order is open (submitted, status Not Started / In Process) - the stock
     already blocked against production in the pipeline.
 
-    Feeds the experimental "Item Requirement (logic)" sheet's "Reserved against
-    Open WO" column. Deliberately isolated so the definition is easy to change
-    while the sheet is validated against the standard one - e.g. swap to Stock
-    Reservation Entries (voucher_type='Work Order') if that becomes the agreed
-    basis."""
+    Feeds the "Item Requirement" sheet's (and the Approved buy-list's) "Reserved
+    against Open WO" figure. Deliberately isolated so the definition is easy to
+    change - e.g. swap to Stock Reservation Entries (voucher_type='Work Order') if
+    that becomes the agreed basis."""
     if not items:
         return {}
     rows = frappe.db.sql(
@@ -822,9 +794,9 @@ def _projected_incoming_from_open_wo_map(items):
     Started / In Process) whose production_item is this item - the supply already
     in the production pipeline.
 
-    Feeds the experimental "Item Requirement (logic)" sheet's "Projected Incoming
-    from Open WO" column. See _reserved_against_open_wo_map on why this is kept
-    separate and easy to adjust."""
+    Feeds the "Item Requirement" sheet's (and the Approved buy-list's) "Projected
+    Incoming from Open WO" figure. See _reserved_against_open_wo_map on why this is
+    kept separate and easy to adjust."""
     if not items:
         return {}
     rows = frappe.db.sql(
@@ -918,19 +890,6 @@ def _pending_po_map(items):
         as_dict=True,
     )
     return {r.item_code: flt(r.pending_qty) for r in rows}
-
-
-def _item_field_map(items, field):
-    """{item_code: <field>} from the Item master (used for Minimum Order Qty and
-    Safety Stock)."""
-    if not items:
-        return {}
-    rows = frappe.db.sql(
-        "SELECT name, `{0}` AS val FROM `tabItem` WHERE name IN %(codes)s".format(field),
-        {"codes": items},
-        as_dict=True,
-    )
-    return {r.name: flt(r.val) for r in rows}
 
 
 # --------------------------------------------------------------------------- #

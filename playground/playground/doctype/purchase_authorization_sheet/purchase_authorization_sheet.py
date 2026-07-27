@@ -13,7 +13,7 @@ Flow:
   1. Create a PAS, attach the workbook, click "Populate from Excel" -> its
      "Approved for Purchase" sheet (Item, Qty, and optionally Vendor) fills the
      item table, each row enriched from ERPNext (description, stock, reserved,
-     rate, value, lead time). Vendor is taken from the sheet when it names a real
+     rate = last purchase rate, value, lead time). Vendor is taken from the sheet when it names a real
      Supplier, else the item's default supplier; either way it stays editable
      (Select any Supplier) in the form afterwards.
   2. Review and tick "Approve" per line (line-wise authorization).
@@ -209,10 +209,14 @@ def _read_approved_sheet(file_url):
 
 def _build_item_row(item_code, qty, vendor=None):
 	it = frappe.get_cached_value(
-		"Item", item_code, ["item_name", "stock_uom", "valuation_rate", "lead_time_days"], as_dict=True
+		"Item", item_code,
+		["item_name", "stock_uom", "last_purchase_rate", "valuation_rate", "lead_time_days"],
+		as_dict=True,
 	) or frappe._dict()
 	actual, reserved = _stock(item_code)
-	rate = flt(it.valuation_rate)
+	# Rate = the item's last purchase (incoming) rate, falling back to its stock
+	# valuation rate when it has never been purchased.
+	rate = flt(it.last_purchase_rate) or flt(it.valuation_rate)
 	return {
 		"item_code": item_code,
 		"description": it.item_name,

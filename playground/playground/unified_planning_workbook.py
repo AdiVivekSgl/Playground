@@ -648,7 +648,7 @@ def _build_approved_for_purchase_sheet(wb, mr_rows):
         ws.cell(r, 3, 0)  # Buffer - manual, defaults to 0
         ws.cell(r, 4, "=B{r}+C{r}".format(r=r))  # Total Qty = Short Qty + Buffer
         ws.cell(r, 5, it.get("stock_uom"))
-        ws.cell(r, 6, flt(it.get("valuation_rate")))
+        ws.cell(r, 6, _purchase_rate(it))  # last purchase (incoming) rate
         ws.cell(r, 7, "=F{r}*D{r}".format(r=r))  # Value = Rate × Total Qty
         ws.cell(r, 8, vendors.get(item))
         ws.cell(r, 9, cint(it.get("lead_time_days")))
@@ -727,8 +727,8 @@ def _plan_committed_by_item(plan_name):
 
 
 def _item_info_map(items):
-    """{item_code: {item_name, stock_uom, valuation_rate, lead_time_days}} for the
-    Approved for Purchase enrichment columns."""
+    """{item_code: {item_name, stock_uom, last_purchase_rate, valuation_rate,
+    lead_time_days}} for the Approved for Purchase enrichment columns."""
     if not items:
         return {}
     return {
@@ -736,9 +736,16 @@ def _item_info_map(items):
         for r in frappe.get_all(
             "Item",
             filters={"name": ["in", items]},
-            fields=["name", "item_name", "stock_uom", "valuation_rate", "lead_time_days"],
+            fields=["name", "item_name", "stock_uom", "last_purchase_rate", "valuation_rate", "lead_time_days"],
         )
     }
+
+
+def _purchase_rate(it):
+    """Rate for the buy-list = the item's last purchase (incoming) rate, falling
+    back to its stock valuation rate when the item has never been purchased (so a
+    brand-new item still carries a sensible figure)."""
+    return flt(it.get("last_purchase_rate")) or flt(it.get("valuation_rate"))
 
 
 def _default_supplier_map(items):

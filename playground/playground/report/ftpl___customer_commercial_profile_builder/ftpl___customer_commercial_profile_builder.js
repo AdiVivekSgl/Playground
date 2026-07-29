@@ -39,6 +39,18 @@ const CCPB_FIELD_META = {
 		conf: null,
 		current: "current_tax_category",
 	},
+	default_sales_partner: {
+		label: __("Sales Partner"),
+		sugg: "suggested_sales_partner",
+		conf: "sales_partner_confidence",
+		current: "current_sales_partner",
+	},
+	default_commission_rate: {
+		label: __("Commission %"),
+		sugg: "suggested_commission",
+		conf: null,
+		current: "current_commission",
+	},
 };
 
 // Confidence colour bands (matches the legend and the .py report_summary).
@@ -206,6 +218,8 @@ function ccpb_apply_selected() {
 			{ fieldname: "default_currency", label: __("Currency"), fieldtype: "Check", default: 0 },
 			{ fieldname: "territory", label: __("Territory"), fieldtype: "Check", default: 0 },
 			{ fieldname: "tax_category", label: __("Tax Category"), fieldtype: "Check", default: 0 },
+			{ fieldname: "default_sales_partner", label: __("Sales Partner"), fieldtype: "Check", default: 0 },
+			{ fieldname: "default_commission_rate", label: __("Commission %"), fieldtype: "Check", default: 0 },
 		],
 		primary_action_label: __("Apply"),
 		primary_action(values) {
@@ -308,7 +322,12 @@ frappe.query_reports["FTPL - Customer Commercial Profile Builder"] = {
 		const formatted = default_formatter(value, row, column, data);
 		const f = column.fieldname;
 
-		if ((f === "price_list_confidence" || f === "payment_terms_confidence") && (value || value === 0)) {
+		if (
+			(f === "price_list_confidence" ||
+				f === "payment_terms_confidence" ||
+				f === "sales_partner_confidence") &&
+			(value || value === 0)
+		) {
 			return `<span style="color:${ccpb_confidence_colour(flt(value))};font-weight:600;">${formatted}</span>`;
 		}
 
@@ -335,6 +354,8 @@ frappe.query_reports["FTPL - Customer Commercial Profile Builder"] = {
 			suggested_currency: "current_currency",
 			suggested_territory: "current_territory",
 			suggested_tax_category: "current_tax_category",
+			suggested_sales_partner: "current_sales_partner",
+			suggested_commission: "current_commission",
 		};
 		if (diff_map[f] && value && data) {
 			const current = data[diff_map[f]];
@@ -350,6 +371,21 @@ frappe.query_reports["FTPL - Customer Commercial Profile Builder"] = {
 			// Paid slower than agreed (positive) is the risk direction → red.
 			const colour = flt(value) > 0 ? "#b71c1c" : "#1b8a2f";
 			return `<span style="color:${colour};">${formatted}</span>`;
+		}
+
+		// Deeper discount off list is more give-away → amber then red.
+		if (f === "avg_discount_pct" && (value || value === 0)) {
+			const v = flt(value);
+			const colour = v >= 15 ? "#b71c1c" : v >= 10 ? "#e08600" : "#1b8a2f";
+			return `<span style="color:${colour};font-weight:600;">${formatted}</span>`;
+		}
+
+		// Outstanding that has run past the current credit limit is a live risk.
+		if (f === "current_outstanding" && data && (value || value === 0)) {
+			const limit = flt(data.current_credit_limit);
+			if (limit > 0 && flt(value) > limit) {
+				return `<span style="color:#b71c1c;font-weight:600;">${formatted}</span>`;
+			}
 		}
 		return formatted;
 	},

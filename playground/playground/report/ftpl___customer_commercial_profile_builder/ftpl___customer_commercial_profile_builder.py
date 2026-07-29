@@ -67,6 +67,7 @@ from frappe.utils import cint, flt
 # latter lives in a child table, not a scalar field).
 SO_FIELD = "so_field"
 CUSTOMER_FIELD = "customer_field"
+NUMERIC = "numeric"  # True for money/percent dimensions (guarded with > 0, not != '')
 
 DIMENSIONS = {
 	"price_list": {SO_FIELD: "selling_price_list", CUSTOMER_FIELD: "default_price_list"},
@@ -75,19 +76,30 @@ DIMENSIONS = {
 	"territory": {SO_FIELD: "territory", CUSTOMER_FIELD: "territory"},
 	"tax_category": {SO_FIELD: "tax_category", CUSTOMER_FIELD: "tax_category"},
 	"company": {SO_FIELD: "company", CUSTOMER_FIELD: None},
+	# Freight / delivery terms - the order's Incoterm. Advisory only (the Customer
+	# Master has no scalar default for it) and guarded by has_column at runtime,
+	# since Incoterm is a newer ERPNext field that may not exist on every site.
+	"freight_terms": {SO_FIELD: "incoterm", CUSTOMER_FIELD: None},
+	# Sales Partner + Commission - both ARE real scalar Customer defaults, so these
+	# are written back by the one-click apply. Commission Rate is numeric (mode of
+	# the actual rates used, which are near-always a small set of fixed values).
+	"sales_partner": {SO_FIELD: "sales_partner", CUSTOMER_FIELD: "default_sales_partner"},
+	"commission_rate": {SO_FIELD: "commission_rate", CUSTOMER_FIELD: "default_commission_rate", NUMERIC: True},
 }
 
 # The Customer Master fields the one-click apply is allowed to write, mapped to a
 # friendly label used in messages (wrapped in _() at the point of use, not here -
 # translating at module import happens before any request/user context exists).
-# Kept deliberately narrow: only settings that are safe, scalar defaults. Sales
-# Person / Company are advisory-only above.
+# Kept deliberately narrow: only settings that are safe, scalar defaults. Company
+# / Sales Person / Freight remain advisory-only above.
 APPLYABLE_FIELDS = {
 	"default_price_list": "Default Price List",
 	"payment_terms": "Payment Terms Template",
 	"default_currency": "Default Currency",
 	"territory": "Territory",
 	"tax_category": "Tax Category",
+	"default_sales_partner": "Default Sales Partner",
+	"default_commission_rate": "Default Commission Rate",
 }
 
 # The five defaults whose absence marks a customer as "missing defaults" (drives
@@ -145,16 +157,26 @@ class CustomerCommercialProfile:
 			)
 			return self.get_columns(), []
 
-		# 2. Modal value + confidence for each commercial dimension.
-		self.modes = {key: self.get_mode_map(key) for key in DIMENSIONS}
+		# 2. Modal value + confidence for each commercial dimension. Incoterm is a
+		#    newer field, so skip it gracefully on sites that don't have it.
+		self.has_incoterm = frappe.db.has_column("Sales Order", "incoterm")
+		self.modes = {}
+		for key in DIMENSIONS:
+			if key == "freight_terms" and not self.has_incoterm:
+				self.modes[key] = {}
+				continue
+			self.modes[key] = self.get_mode_map(key)
 		self.modes["sales_person"] = self.get_sales_person_mode_map()
 
 		# 3. Current Customer Master values + current (primary) sales person.
 		self.current = self.get_current_customer_values()
 		self.current_sales_person = self.get_current_sales_person()
 
-		# 4. Payment behaviour (secondary source).
+		# 4. Secondary analyses: payment behaviour, list-price gross (for the
+		#    discount give-away), and credit exposure.
 		self.payment = self.get_payment_behaviour()
+		self.price_list_totals = self.get_price_list_totals()
+		self.credit = self.get_credit_data()
 
 		rows = self.build_rows()
 		message = self.build_message()
@@ -212,6 +234,7 @@ class CustomerCommercialProfile:
 				MAX(so.transaction_date) AS last_order,
 				SUM(so.base_grand_total) AS total_sales,
 				AVG(so.base_grand_total) AS avg_order_value,
+				SUM(so.base_net_total) AS net_total,
 				SUBSTRING_INDEX(
 					GROUP_CONCAT(so.shipping_address_name ORDER BY so.transaction_date DESC SEPARATOR '\n'),
 					'\n', 1
@@ -240,15 +263,19 @@ class CustomerCommercialProfile:
 		frequently used non-blank value and confidence = count / total. `total` is
 		the number of orders that carried *any* value for this dimension (the
 		denominator in the brief's example: 28 / 31)."""
-		field = DIMENSIONS[key][SO_FIELD]
-		# `field` is a fixed constant from DIMENSIONS, never user input, so it is
-		# safe to inline; every runtime value is still bound as a param.
+		spec = DIMENSIONS[key]
+		field = spec[SO_FIELD]
+		# Numeric dimensions (Commission Rate) count only orders with a real value,
+		# so a > 0 guard; text dimensions use the non-blank guard. `field` is a
+		# fixed constant from DIMENSIONS, never user input, so it is safe to inline;
+		# every runtime value is still bound as a param.
+		guard = f"so.{field} > 0" if spec.get(NUMERIC) else f"so.{field} IS NOT NULL AND so.{field} != ''"
 		rows = frappe.db.sql(
 			f"""
 			SELECT so.customer AS customer, so.{field} AS val, COUNT(*) AS c
 			FROM `tabSales Order` so
 			WHERE {self._so_conditions('so')}
-				AND so.{field} IS NOT NULL AND so.{field} != ''
+				AND {guard}
 			GROUP BY so.customer, so.{field}
 			""",
 			self.params,
@@ -308,7 +335,8 @@ class CustomerCommercialProfile:
 			"""
 			SELECT
 				name, customer_name, customer_group, territory, disabled,
-				default_price_list, payment_terms, default_currency, tax_category
+				default_price_list, payment_terms, default_currency, tax_category,
+				default_sales_partner, default_commission_rate
 			FROM `tabCustomer`
 			WHERE name IN %(customers)s
 			""",
@@ -381,6 +409,103 @@ class CustomerCommercialProfile:
 		return {r.customer: r for r in rows}
 
 	# ------------------------------------------------------------------ #
+	# 5. List-price gross (drives Total Sales at Price List + Avg Discount)
+	# ------------------------------------------------------------------ #
+
+	def get_price_list_totals(self):
+		"""Gross value of every ordered line at its PRICE LIST rate - i.e. what the
+		orders would have billed before any line or header discount - per customer.
+		SUM(base_price_list_rate * qty) over Sales Order Item, in company currency so
+		it lines up with Total Sales. Compared against the actual net total this is
+		the customer's discount give-away."""
+		rows = frappe.db.sql(
+			f"""
+			SELECT
+				so.customer AS customer,
+				SUM(soi.base_price_list_rate * soi.qty) AS list_total
+			FROM `tabSales Order Item` soi
+			INNER JOIN `tabSales Order` so ON so.name = soi.parent
+			WHERE {self._so_conditions('so')}
+			GROUP BY so.customer
+			""",
+			self.params,
+			as_dict=True,
+		)
+		return {r.customer: flt(r.list_total) for r in rows}
+
+	# ------------------------------------------------------------------ #
+	# 6. Credit exposure (current limit / outstanding + suggested limit)
+	# ------------------------------------------------------------------ #
+
+	def get_credit_data(self):
+		"""Per customer: the current per-company credit limit, the current
+		outstanding exposure, and a *suggested* credit limit.
+
+		Suggested limit is the peak MONTHLY billing over the window - the single
+		busiest month's invoiced value - a common, defensible basis for a limit
+		(and the closest cheap proxy to the brief's "highest outstanding" without
+		reconstructing a day-by-day running balance). Outstanding is a present
+		balance, so it is NOT restricted to the date window."""
+		customers = tuple(self.customers)
+
+		limits = frappe.db.sql(
+			"""
+			SELECT parent AS customer, credit_limit
+			FROM `tabCustomer Credit Limit`
+			WHERE parenttype = 'Customer' AND company = %(company)s AND parent IN %(customers)s
+			""",
+			{"company": self.company, "customers": customers},
+			as_dict=True,
+		)
+		limit_map = {r.customer: flt(r.credit_limit) for r in limits}
+
+		outstanding = frappe.db.sql(
+			"""
+			SELECT customer, SUM(outstanding_amount) AS outstanding
+			FROM `tabSales Invoice`
+			WHERE docstatus = 1 AND company = %(company)s AND customer IN %(customers)s
+			GROUP BY customer
+			""",
+			{"company": self.company, "customers": customers},
+			as_dict=True,
+		)
+		outstanding_map = {r.customer: flt(r.outstanding) for r in outstanding}
+
+		# %% escapes the literal % of DATE_FORMAT under the pyformat paramstyle.
+		peaks = frappe.db.sql(
+			"""
+			SELECT customer, MAX(monthly) AS peak FROM (
+				SELECT customer, DATE_FORMAT(posting_date, '%%Y-%%m') AS ym,
+					SUM(base_grand_total) AS monthly
+				FROM `tabSales Invoice`
+				WHERE docstatus = 1 AND company = %(company)s AND customer IN %(customers)s
+					AND posting_date BETWEEN %(from_date)s AND %(to_date)s
+				GROUP BY customer, ym
+			) t
+			GROUP BY customer
+			""",
+			{
+				"company": self.company,
+				"customers": customers,
+				"from_date": self.params["from_date"],
+				"to_date": self.params["to_date"],
+			},
+			as_dict=True,
+		)
+		peak_map = {r.customer: flt(r.peak) for r in peaks}
+
+		return {
+			c: frappe._dict(
+				{
+					"current_credit_limit": limit_map.get(c),
+					"current_outstanding": outstanding_map.get(c, 0.0),
+					"suggested_credit_limit": peak_map.get(c, 0.0),
+				}
+			)
+			for c in self.customers
+		}
+
+	# ------------------------------------------------------------------ #
 	# Row assembly
 	# ------------------------------------------------------------------ #
 
@@ -423,11 +548,22 @@ class CustomerCommercialProfile:
 		tax = sugg("tax_category")
 		company = sugg("company")
 		sperson = sugg("sales_person")
+		freight = sugg("freight_terms")
+		partner = sugg("sales_partner")
+		commission = sugg("commission_rate")
 
 		pay = self.payment.get(customer) or frappe._dict()
 		avg_pay = flt(pay.get("avg_payment_days")) if pay.get("avg_payment_days") is not None else None
 		avg_term = flt(pay.get("avg_term_days")) if pay.get("avg_term_days") is not None else None
 		pay_diff = (avg_pay - avg_term) if (avg_pay is not None and avg_term is not None) else None
+
+		# Discount give-away: gross at list price vs actual net billed.
+		list_total = flt(self.price_list_totals.get(customer))
+		net_total = flt(summ.get("net_total"))
+		avg_discount = ((list_total - net_total) / list_total * 100.0) if list_total > 0 else None
+
+		credit = self.credit.get(customer) or frappe._dict()
+		cur_commission = cust.get("default_commission_rate")
 
 		# Which key defaults are blank on the Master AND have a suggestion to fill.
 		missing = [
@@ -447,6 +583,13 @@ class CustomerCommercialProfile:
 			"last_order": summ.get("last_order"),
 			"total_sales": flt(summ.get("total_sales")),
 			"avg_order_value": flt(summ.get("avg_order_value")),
+			"total_sales_at_price_list": list_total,
+			# Discounts (give-away vs price list)
+			"avg_discount_pct": avg_discount,
+			# Credit exposure
+			"current_credit_limit": credit.get("current_credit_limit"),
+			"current_outstanding": credit.get("current_outstanding"),
+			"suggested_credit_limit": credit.get("suggested_credit_limit"),
 			# Price list
 			"current_price_list": cust.get("default_price_list"),
 			"suggested_price_list": price.value,
@@ -472,6 +615,14 @@ class CustomerCommercialProfile:
 			# Tax category
 			"current_tax_category": cust.get("tax_category"),
 			"suggested_tax_category": tax.value,
+			# Sales Partner + Commission (applyable)
+			"current_sales_partner": cust.get("default_sales_partner"),
+			"suggested_sales_partner": partner.value,
+			"sales_partner_confidence": flt(partner.confidence),
+			"current_commission": flt(cur_commission) if cur_commission is not None else None,
+			"suggested_commission": commission.value,
+			# Freight terms (advisory - Incoterm)
+			"suggested_freight_terms": freight.value,
 			# Company (advisory)
 			"suggested_company": company.value,
 			# Addresses
@@ -502,11 +653,13 @@ class CustomerCommercialProfile:
 		if missing:
 			return _("Missing")
 
-		# Master set but disagrees with the modal historical value.
+		# Master set but disagrees with the modal historical value. Scoped to the
+		# KEY defaults only - Sales Partner / Commission are applyable but a
+		# mismatch there shouldn't drive the customer's overall verdict.
 		disagreements = []
 		for key, spec in DIMENSIONS.items():
 			cfield = spec[CUSTOMER_FIELD]
-			if not cfield:
+			if not cfield or cfield not in KEY_CUSTOMER_FIELDS:
 				continue
 			current = row.get(_current_col(cfield))
 			suggested = (self.modes.get(key, {}).get(row["customer"]) or frappe._dict()).get("value")
@@ -536,6 +689,8 @@ class CustomerCommercialProfile:
 		needs_review = sum(1 for r in rows if r.get("recommendation_status") == _("Needs Review"))
 		confs = [r["price_list_confidence"] for r in rows if r.get("price_list_confidence")]
 		avg_conf = (sum(confs) / len(confs)) if confs else 0.0
+		discs = [r["avg_discount_pct"] for r in rows if r.get("avg_discount_pct") is not None]
+		avg_disc = (sum(discs) / len(discs)) if discs else 0.0
 
 		return [
 			{"label": _("Customers Analysed"), "value": total, "datatype": "Int"},
@@ -556,6 +711,12 @@ class CustomerCommercialProfile:
 				"value": flt(avg_conf, 1),
 				"datatype": "Percent",
 				"indicator": "Green" if avg_conf >= 95 else ("Orange" if avg_conf >= self.threshold else "Red"),
+			},
+			{
+				"label": _("Avg Discount vs List"),
+				"value": flt(avg_disc, 1),
+				"datatype": "Percent",
+				"indicator": "Orange" if avg_disc >= 10 else "Green",
 			},
 		]
 
@@ -593,6 +754,13 @@ class CustomerCommercialProfile:
 			{"label": _("Last Order"), "fieldname": "last_order", "fieldtype": "Date", "width": 100},
 			{"label": _("Total Sales"), "fieldname": "total_sales", "fieldtype": "Currency", "width": 130},
 			{"label": _("Avg Order Value"), "fieldname": "avg_order_value", "fieldtype": "Currency", "width": 130},
+			{"label": _("Total Sales at Price List Price"), "fieldname": "total_sales_at_price_list", "fieldtype": "Currency", "width": 160},
+			# Discounts (give-away vs price list)
+			{"label": _("Avg Discount %"), "fieldname": "avg_discount_pct", "fieldtype": "Percent", "width": 110},
+			# Credit exposure
+			{"label": _("Current Credit Limit"), "fieldname": "current_credit_limit", "fieldtype": "Currency", "width": 140},
+			{"label": _("Current Outstanding"), "fieldname": "current_outstanding", "fieldtype": "Currency", "width": 140},
+			{"label": _("Suggested Credit Limit"), "fieldname": "suggested_credit_limit", "fieldtype": "Currency", "width": 150},
 			# Price list
 			{"label": _("Current Price List"), "fieldname": "current_price_list", "fieldtype": "Link", "options": "Price List", "width": 150},
 			{"label": _("Suggested Price List"), "fieldname": "suggested_price_list", "fieldtype": "Link", "options": "Price List", "width": 150},
@@ -618,6 +786,14 @@ class CustomerCommercialProfile:
 			# Tax category
 			{"label": _("Current Tax Category"), "fieldname": "current_tax_category", "fieldtype": "Link", "options": "Tax Category", "width": 140},
 			{"label": _("Suggested Tax Category"), "fieldname": "suggested_tax_category", "fieldtype": "Link", "options": "Tax Category", "width": 150},
+			# Sales Partner + Commission (applyable)
+			{"label": _("Current Sales Partner"), "fieldname": "current_sales_partner", "fieldtype": "Link", "options": "Sales Partner", "width": 150},
+			{"label": _("Suggested Sales Partner"), "fieldname": "suggested_sales_partner", "fieldtype": "Link", "options": "Sales Partner", "width": 150},
+			{"label": _("Sales Partner Conf %"), "fieldname": "sales_partner_confidence", "fieldtype": "Percent", "width": 130},
+			{"label": _("Current Commission %"), "fieldname": "current_commission", "fieldtype": "Percent", "width": 120},
+			{"label": _("Suggested Commission %"), "fieldname": "suggested_commission", "fieldtype": "Percent", "width": 130},
+			# Freight terms (advisory - Incoterm)
+			{"label": _("Suggested Freight Terms"), "fieldname": "suggested_freight_terms", "fieldtype": "Data", "width": 150},
 			# Advisory / addresses
 			{"label": _("Suggested Company"), "fieldname": "suggested_company", "fieldtype": "Link", "options": "Company", "width": 140},
 			{"label": _("Latest Shipping Address"), "fieldname": "latest_shipping_address", "fieldtype": "Link", "options": "Address", "width": 170},
@@ -631,8 +807,9 @@ class CustomerCommercialProfile:
 
 def _neg_str(value):
 	"""Sort key that makes `max()` break ties on the alphabetically-first value:
-	compares the negated code points so a smaller string ranks higher."""
-	return tuple(-ord(ch) for ch in (value or ""))
+	compares the negated code points so a smaller string ranks higher. Coerces to
+	str first so numeric dimensions (e.g. Commission Rate) tie-break cleanly too."""
+	return tuple(-ord(ch) for ch in str("" if value is None else value))
 
 
 def _current_col(customer_field):

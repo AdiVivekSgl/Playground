@@ -76,10 +76,6 @@ DIMENSIONS = {
 	"territory": {SO_FIELD: "territory", CUSTOMER_FIELD: "territory"},
 	"tax_category": {SO_FIELD: "tax_category", CUSTOMER_FIELD: "tax_category"},
 	"company": {SO_FIELD: "company", CUSTOMER_FIELD: None},
-	# Freight / delivery terms - the order's Incoterm. Advisory only (the Customer
-	# Master has no scalar default for it) and guarded by has_column at runtime,
-	# since Incoterm is a newer ERPNext field that may not exist on every site.
-	"freight_terms": {SO_FIELD: "incoterm", CUSTOMER_FIELD: None},
 	# Sales Partner + Commission - both ARE real scalar Customer defaults, so these
 	# are written back by the one-click apply. Commission Rate is numeric (mode of
 	# the actual rates used, which are near-always a small set of fixed values).
@@ -111,6 +107,16 @@ KEY_CUSTOMER_FIELDS = [
 	"territory",
 	"tax_category",
 ]
+
+# Freight is read from the Sales Order custom fields "Freight -Type" (categorical,
+# so we take the modal value) and "Freight -Amount" (numeric, so we average it).
+# Frappe's scrub of a label containing a space and a hyphen can land on slightly
+# different fieldnames site to site, so each is RESOLVED at runtime: first these
+# candidate fieldnames, then a lookup by the field's LABEL in Custom Field (see
+# _resolve_so_field). If neither resolves, the freight analysis is simply skipped
+# (advisory only, no Customer default anyway).
+FREIGHT_TYPE_CANDIDATES = ["custom_freight_type", "custom_freight__type"]
+FREIGHT_AMOUNT_CANDIDATES = ["custom_freight_amount", "custom_freight__amount"]
 
 
 def execute(filters=None):
@@ -157,16 +163,19 @@ class CustomerCommercialProfile:
 			)
 			return self.get_columns(), []
 
-		# 2. Modal value + confidence for each commercial dimension. Incoterm is a
-		#    newer field, so skip it gracefully on sites that don't have it.
-		self.has_incoterm = frappe.db.has_column("Sales Order", "incoterm")
-		self.modes = {}
-		for key in DIMENSIONS:
-			if key == "freight_terms" and not self.has_incoterm:
-				self.modes[key] = {}
-				continue
-			self.modes[key] = self.get_mode_map(key)
+		# 2. Modal value + confidence for each commercial dimension.
+		self.modes = {key: self.get_mode_map(key) for key in DIMENSIONS}
 		self.modes["sales_person"] = self.get_sales_person_mode_map()
+
+		# 2b. Freight from the Sales Order custom fields (resolved defensively; the
+		#     type is modal, the amount is averaged). Skipped if the fields are
+		#     absent on this site.
+		self.freight_type_field = _resolve_so_field(FREIGHT_TYPE_CANDIDATES, "Freight%Type")
+		self.freight_amount_field = _resolve_so_field(FREIGHT_AMOUNT_CANDIDATES, "Freight%Amount")
+		self.modes["freight_terms"] = (
+			self._mode_map_for_field(self.freight_type_field) if self.freight_type_field else {}
+		)
+		self.freight_amount = self.get_freight_amount_map() if self.freight_amount_field else {}
 
 		# 3. Current Customer Master values + current (primary) sales person.
 		self.current = self.get_current_customer_values()
@@ -264,12 +273,15 @@ class CustomerCommercialProfile:
 		the number of orders that carried *any* value for this dimension (the
 		denominator in the brief's example: 28 / 31)."""
 		spec = DIMENSIONS[key]
-		field = spec[SO_FIELD]
-		# Numeric dimensions (Commission Rate) count only orders with a real value,
-		# so a > 0 guard; text dimensions use the non-blank guard. `field` is a
-		# fixed constant from DIMENSIONS, never user input, so it is safe to inline;
-		# every runtime value is still bound as a param.
-		guard = f"so.{field} > 0" if spec.get(NUMERIC) else f"so.{field} IS NOT NULL AND so.{field} != ''"
+		return self._mode_map_for_field(spec[SO_FIELD], numeric=bool(spec.get(NUMERIC)))
+
+	def _mode_map_for_field(self, field, numeric=False):
+		"""Modal-value map for an arbitrary Sales Order column (also used for the
+		resolved Freight -Type custom field). Numeric fields count only orders with a
+		real value (> 0 guard); text fields use the non-blank guard. `field` is
+		always a code-defined constant or a column already validated by has_column -
+		never free user input - so it is safe to inline; runtime values stay bound."""
+		guard = f"so.{field} > 0" if numeric else f"so.{field} IS NOT NULL AND so.{field} != ''"
 		rows = frappe.db.sql(
 			f"""
 			SELECT so.customer AS customer, so.{field} AS val, COUNT(*) AS c
@@ -282,6 +294,23 @@ class CustomerCommercialProfile:
 			as_dict=True,
 		)
 		return self._reduce_to_mode(rows)
+
+	def get_freight_amount_map(self):
+		"""Average freight amount per order, per customer, from the resolved
+		Freight -Amount custom field (orders with a positive amount only)."""
+		field = self.freight_amount_field
+		rows = frappe.db.sql(
+			f"""
+			SELECT so.customer AS customer, AVG(so.{field}) AS amount
+			FROM `tabSales Order` so
+			WHERE {self._so_conditions('so')}
+				AND so.{field} > 0
+			GROUP BY so.customer
+			""",
+			self.params,
+			as_dict=True,
+		)
+		return {r.customer: flt(r.amount) for r in rows}
 
 	def get_sales_person_mode_map(self):
 		"""Same idea as get_mode_map but sourced from the Sales Team child table
@@ -564,6 +593,7 @@ class CustomerCommercialProfile:
 
 		credit = self.credit.get(customer) or frappe._dict()
 		cur_commission = cust.get("default_commission_rate")
+		freight_amt = self.freight_amount.get(customer)
 
 		# Which key defaults are blank on the Master AND have a suggestion to fill.
 		missing = [
@@ -621,8 +651,9 @@ class CustomerCommercialProfile:
 			"sales_partner_confidence": flt(partner.confidence),
 			"current_commission": flt(cur_commission) if cur_commission is not None else None,
 			"suggested_commission": commission.value,
-			# Freight terms (advisory - Incoterm)
-			"suggested_freight_terms": freight.value,
+			# Freight (advisory - from Sales Order custom fields)
+			"suggested_freight_type": freight.value,
+			"avg_freight_amount": flt(freight_amt) if freight_amt is not None else None,
 			# Company (advisory)
 			"suggested_company": company.value,
 			# Addresses
@@ -792,8 +823,9 @@ class CustomerCommercialProfile:
 			{"label": _("Sales Partner Conf %"), "fieldname": "sales_partner_confidence", "fieldtype": "Percent", "width": 130},
 			{"label": _("Current Commission %"), "fieldname": "current_commission", "fieldtype": "Percent", "width": 120},
 			{"label": _("Suggested Commission %"), "fieldname": "suggested_commission", "fieldtype": "Percent", "width": 130},
-			# Freight terms (advisory - Incoterm)
-			{"label": _("Suggested Freight Terms"), "fieldname": "suggested_freight_terms", "fieldtype": "Data", "width": 150},
+			# Freight (advisory - from Sales Order custom Freight -Type / -Amount)
+			{"label": _("Suggested Freight Type"), "fieldname": "suggested_freight_type", "fieldtype": "Data", "width": 150},
+			{"label": _("Avg Freight Amount"), "fieldname": "avg_freight_amount", "fieldtype": "Currency", "width": 130},
 			# Advisory / addresses
 			{"label": _("Suggested Company"), "fieldname": "suggested_company", "fieldtype": "Link", "options": "Company", "width": 140},
 			{"label": _("Latest Shipping Address"), "fieldname": "latest_shipping_address", "fieldtype": "Link", "options": "Address", "width": 170},
@@ -804,6 +836,22 @@ class CustomerCommercialProfile:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+def _resolve_so_field(candidates, label_like):
+	"""Resolve a Sales Order custom field robustly. First try each known candidate
+	fieldname; if none exists, fall back to looking the field up by its LABEL in
+	Custom Field (e.g. "Freight -Type"), which is authoritative no matter how
+	Frappe scrubbed the label into a fieldname. Returns the fieldname or None."""
+	for candidate in candidates:
+		if frappe.db.has_column("Sales Order", candidate):
+			return candidate
+	name = frappe.db.get_value(
+		"Custom Field", {"dt": "Sales Order", "label": ["like", label_like]}, "fieldname"
+	)
+	if name and frappe.db.has_column("Sales Order", name):
+		return name
+	return None
+
 
 def _neg_str(value):
 	"""Sort key that makes `max()` break ties on the alphabetically-first value:

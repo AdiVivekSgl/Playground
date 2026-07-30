@@ -47,6 +47,8 @@ from frappe.utils import flt
 
 from erpnext.accounts.doctype.purchase_invoice.purchase_invoice import PurchaseInvoice
 
+from playground.playground import provision_management
+
 FLAG_FIELD = "custom_is_price_adjustment_debit_note"
 ADJ_ACCOUNT_COMPANY_FIELD = "custom_purchase_rate_adjustment_account"
 
@@ -55,6 +57,19 @@ class CustomPurchaseInvoice(PurchaseInvoice):
 	def validate(self):
 		super().validate()
 		self._validate_price_adjustment_debit_note()
+
+	# --- provision settlement -------------------------------------------- #
+	# When this PI links an open Expense Provision (custom_provision_against), the
+	# consumed portion is (a) reclassified off the expense account onto the
+	# provision account in get_gl_entries below, and (b) recorded as a settlement
+	# row on the provision here. See playground.playground.provision_management.
+	def on_submit(self):
+		super().on_submit()
+		provision_management.apply_pi_settlement(self)
+
+	def on_cancel(self):
+		super().on_cancel()
+		provision_management.remove_pi_settlement(self)
 
 	# --- validation ------------------------------------------------------- #
 	def _validate_price_adjustment_debit_note(self):
@@ -83,6 +98,8 @@ class CustomPurchaseInvoice(PurchaseInvoice):
 		gl_entries = super().get_gl_entries(warehouse_account)
 		if self.get("is_return") and self.get(FLAG_FIELD):
 			gl_entries += self._price_adjustment_reclass_entries(gl_entries)
+		if self.get(provision_management.LINK_FIELD) and not self.get("is_return"):
+			gl_entries += provision_management.provision_reclass_gl_entries(self, self.get_gl_dict)
 		return gl_entries
 
 	def _price_adjustment_reclass_entries(self, gl_entries):

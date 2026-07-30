@@ -105,10 +105,29 @@ doc_events = {
 	"Weekly Planning Snapshot": {
 		"on_submit": "playground.playground.sales_order_hooks.recompute_from_snapshot",
 	},
+	# Provision Management: a Journal Entry linking an open Expense Provision
+	# (custom_provision_against) settles it from the JE's own posting. Purchase
+	# Invoice settlement is handled in the CustomPurchaseInvoice override above.
+	"Journal Entry": {
+		"validate": "playground.playground.provision_management.on_journal_entry_validate",
+		"on_submit": "playground.playground.provision_management.on_journal_entry_submit",
+		"on_cancel": "playground.playground.provision_management.on_journal_entry_cancel",
+	},
 }
 
 scheduler_events = {
 	"hourly": [
 		"playground.playground.sales_order_hooks.recompute_all_open_so_material_status",
 	],
+	# Auto-Reverse mode: reverse any unsettled balance of last month's provisions
+	# at the start of the new month (classic accrual reversal).
+	"monthly": [
+		"playground.playground.provision_management.auto_reverse_due_provisions",
+	],
 }
+
+# Provision Management: create the "Provision Against" link on Purchase Invoice
+# and Journal Entry so it travels with the app (idempotent - runs every migrate).
+after_migrate = [
+	"playground.playground.provision_management.create_provision_custom_fields",
+]

@@ -1,0 +1,60 @@
+{
+ "doctype": "DocType",
+ "name": "Expense Provision",
+ "module": "Playground",
+ "custom": 0,
+ "is_submittable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "autoname": "naming_series:",
+ "title_field": "expense_account",
+ "description": "Month-end provision (accrual) for a recurring/estimated expense - electricity, bank interest, freight, audit/professional fees, etc. On submit it books the provision Journal Entry (Expense Dr / Provision Cr) and stays Open until actual documents (Purchase Invoice / Journal Entry) are matched against it via their 'Provision Against' link. Supports partial settlement and over/under variance.",
+ "field_order": [
+  "naming_series", "company", "posting_date", "column_break_hdr",
+  "status", "reversal_mode",
+  "accounts_section", "expense_account", "provision_account", "column_break_acc", "cost_center", "project",
+  "party_section", "party_type", "party",
+  "amount_section", "provision_amount", "column_break_amt", "utilized_amount", "outstanding_amount",
+  "settlement_section", "settlements",
+  "reference_section", "provision_journal_entry", "remarks", "amended_from"
+ ],
+ "fields": [
+  {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "EXP-PROV-.YYYY.-.#####", "default": "EXP-PROV-.YYYY.-.#####", "reqd": 1},
+  {"fieldname": "company", "fieldtype": "Link", "options": "Company", "label": "Company", "reqd": 1, "in_standard_filter": 1},
+  {"fieldname": "posting_date", "fieldtype": "Date", "label": "Posting Date", "reqd": 1, "description": "Month-end date the provision is booked on (e.g. 31-Mar)."},
+  {"fieldname": "column_break_hdr", "fieldtype": "Column Break"},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Draft\nOpen\nPartially Settled\nSettled\nReversed\nCancelled", "default": "Draft", "read_only": 1, "in_list_view": 1, "in_standard_filter": 1, "allow_on_submit": 1},
+  {"fieldname": "reversal_mode", "fieldtype": "Select", "label": "Reversal Mode", "options": "Match and Settle\nAuto-Reverse", "default": "Match and Settle", "description": "Match and Settle: keep the provision Open and consume it as actual invoices/JEs are linked (explicit provision-to-actual matching). Auto-Reverse: the monthly scheduler reverses any unsettled balance at the start of the next month (classic accrual reversal)."},
+
+  {"fieldname": "accounts_section", "fieldtype": "Section Break", "label": "Accounts"},
+  {"fieldname": "expense_account", "fieldtype": "Link", "options": "Account", "label": "Expense Account", "reqd": 1, "in_list_view": 1, "description": "P&L expense being accrued (Electricity, Interest, Freight, ...)."},
+  {"fieldname": "provision_account", "fieldtype": "Link", "options": "Account", "label": "Provision Account", "reqd": 1, "description": "Liability account holding the accrual (Provision for Expenses / Accrued Expenses)."},
+  {"fieldname": "column_break_acc", "fieldtype": "Column Break"},
+  {"fieldname": "cost_center", "fieldtype": "Link", "options": "Cost Center", "label": "Cost Center", "reqd": 1, "description": "Cost center for the expense leg (mandatory on P&L accounts in ERPNext)."},
+  {"fieldname": "project", "fieldtype": "Link", "options": "Project", "label": "Project"},
+
+  {"fieldname": "party_section", "fieldtype": "Section Break", "label": "Party (optional)"},
+  {"fieldname": "party_type", "fieldtype": "Link", "options": "Party Type", "label": "Party Type", "description": "Optional - e.g. Supplier for a known vendor, or the bank for interest."},
+  {"fieldname": "party", "fieldtype": "Dynamic Link", "options": "party_type", "label": "Party"},
+
+  {"fieldname": "amount_section", "fieldtype": "Section Break", "label": "Amounts"},
+  {"fieldname": "provision_amount", "fieldtype": "Currency", "label": "Provision Amount", "reqd": 1, "in_list_view": 1, "description": "Estimated expense to accrue."},
+  {"fieldname": "column_break_amt", "fieldtype": "Column Break"},
+  {"fieldname": "utilized_amount", "fieldtype": "Currency", "label": "Utilized", "read_only": 1, "allow_on_submit": 1, "description": "Sum of amounts consumed by linked actual documents."},
+  {"fieldname": "outstanding_amount", "fieldtype": "Currency", "label": "Outstanding", "read_only": 1, "allow_on_submit": 1, "in_list_view": 1, "description": "Provision Amount less Utilized."},
+
+  {"fieldname": "settlement_section", "fieldtype": "Section Break", "label": "Settlements"},
+  {"fieldname": "settlements", "fieldtype": "Table", "options": "Expense Provision Settlement", "label": "Settlements", "read_only": 1, "allow_on_submit": 1, "description": "One row per actual document matched against this provision (added automatically when a Purchase Invoice / Journal Entry linking this provision is submitted)."},
+
+  {"fieldname": "reference_section", "fieldtype": "Section Break", "label": "Reference"},
+  {"fieldname": "provision_journal_entry", "fieldtype": "Link", "options": "Journal Entry", "label": "Provision Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The Expense Dr / Provision Cr entry auto-created on submit."},
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "Remarks"},
+  {"fieldname": "amended_from", "fieldtype": "Link", "options": "Expense Provision", "label": "Amended From", "read_only": 1, "no_copy": 1, "print_hide": 1}
+ ],
+ "permissions": [
+  {"role": "Accounts Manager", "read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1},
+  {"role": "Accounts User", "read": 1, "write": 1, "create": 1},
+  {"role": "Auditor", "read": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1}
+ ]
+}

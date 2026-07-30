@@ -112,16 +112,16 @@
  },
  {
   "doctype": "Custom Field",
-  "name": "Journal Entry-custom_expense_customer",
+  "name": "Journal Entry-custom_linked_purchase_invoice",
   "dt": "Journal Entry",
-  "fieldname": "custom_expense_customer",
-  "label": "Expense Customer",
-  "fieldtype": "Link",
-  "options": "Customer",
+  "fieldname": "custom_linked_purchase_invoice",
+  "label": "Linked Purchase Invoice",
+  "fieldtype": "Table MultiSelect",
+  "options": "Expense Purchase Invoice",
   "insert_after": "custom_linked_sales_invoice",
   "allow_on_submit": 1,
   "translatable": 0,
-  "description": "Optional customer this expense is attributed to, for grouping non-COGS expenses. Manual entry - no longer auto-fetched, since Linked Sales Invoice now accepts multiple invoices that may span customers."
+  "description": "One or more Purchase Invoices this (non-COGS) expense is attributed to (multi-select via the Expense Purchase Invoice child table), so an expense Journal Entry can be tagged against specific supplier bills for reporting."
  },
  {
   "doctype": "Custom Field",
@@ -135,19 +135,6 @@
   "allow_on_submit": 1,
   "translatable": 0,
   "description": "One or more Sales Invoices this (non-COGS) expense is attributed to (multi-select via the Expense Sales Invoice child table), so expenses can be tagged against specific customer invoices for reporting."
- },
- {
-  "doctype": "Custom Field",
-  "name": "Purchase Invoice-custom_expense_customer",
-  "dt": "Purchase Invoice",
-  "fieldname": "custom_expense_customer",
-  "label": "Expense Customer",
-  "fieldtype": "Link",
-  "options": "Customer",
-  "insert_after": "custom_linked_sales_invoice",
-  "allow_on_submit": 1,
-  "translatable": 0,
-  "description": "Optional customer this expense is attributed to, for grouping non-COGS expenses. Manual entry - no longer auto-fetched, since Linked Sales Invoice now accepts multiple invoices that may span customers."
  },
  {
   "doctype": "Custom Field",

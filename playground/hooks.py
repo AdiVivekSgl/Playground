@@ -132,6 +132,15 @@ scheduler_events = {
 	"monthly": [
 		"playground.playground.provision_management.auto_reverse_due_provisions",
 	],
+	# Refresh BOM valuations on the 1st of every month: fire an "Update Cost"
+	# across all BOMs (same as the BOM Update Tool button). "0 2 1 * *" =
+	# 02:00 on the 1st - off-peak so the level-wise recost doesn't fight the
+	# midnight scheduler traffic.
+	"cron": {
+		"0 2 1 * *": [
+			"playground.playground.bom_cost.update_cost_for_all_boms",
+		],
+	},
 }
 
 # Provision Management: create the "Provision Against" link on Purchase Invoice

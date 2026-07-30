@@ -356,7 +356,12 @@ def _reverse_provision(provision_name, amount, posting_date):
 # --------------------------------------------------------------------------- #
 def create_provision_custom_fields():
 	"""Create the 'Provision Against' link on Purchase Invoice and Journal Entry.
-	Idempotent - safe to run on every migrate."""
+	Idempotent - safe to run on every migrate.
+
+	Runs as an after_migrate hook, so it is wrapped defensively: a failure here must
+	never abort migrate (on Frappe Cloud a failed migrate rolls the whole DB back).
+	If field creation fails it is logged and the migrate still completes; the field
+	can then be created on a later migrate or manually."""
 	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 	field = {
@@ -370,4 +375,7 @@ def create_provision_custom_fields():
 			"submit the consumed amount is matched off the provision."
 		),
 	}
-	create_custom_fields({"Purchase Invoice": [field], "Journal Entry": [dict(field)]}, ignore_validate=True)
+	try:
+		create_custom_fields({"Purchase Invoice": [field], "Journal Entry": [dict(field)]}, ignore_validate=True)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "create_provision_custom_fields failed")

@@ -60,14 +60,22 @@ fixtures = [
 			],
 		],
 	},
-	# Non-COGS expense attribution: link a Journal Entry / Purchase Invoice to a
-	# Sales Invoice (+ auto-fetched Customer) so expenses can be tagged against a
-	# specific customer / invoice.
+	# Non-COGS expense attribution: link a Journal Entry / Purchase Invoice to
+	# Sales Invoices (and, on Journal Entry, Purchase Invoices) so expenses can be
+	# tagged against specific invoices. Customer/Supplier are derived from the
+	# linked invoices at report time, not stored on the expense document.
 	{
 		"doctype": "Custom Field",
 		"filters": [
 			["dt", "in", ["Journal Entry", "Purchase Invoice"]],
-			["fieldname", "in", ["custom_linked_sales_invoice", "custom_expense_customer"]],
+			[
+				"fieldname",
+				"in",
+				[
+					"custom_linked_sales_invoice",
+					"custom_linked_purchase_invoice",
+				],
+			],
 		],
 	},
 	# Audit trail for the Purchase Order bulk-close action.

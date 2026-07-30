@@ -1,0 +1,22 @@
+{
+ "doctype": "DocType",
+ "name": "Expense Purchase Invoice",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Child table row holding one linked Purchase Invoice, used by the Table MultiSelect \"Linked Purchase Invoice\" field on Journal Entry (non-COGS expense attribution).",
+ "fields": [
+  {
+   "fieldname": "purchase_invoice",
+   "fieldtype": "Link",
+   "options": "Purchase Invoice",
+   "label": "Purchase Invoice",
+   "in_list_view": 1,
+   "columns": 8,
+   "reqd": 1
+  }
+ ],
+ "permissions": []
+}

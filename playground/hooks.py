@@ -19,6 +19,11 @@ doctype_js = {
 	# Permissions / Roll-up) to review and mirror a profile's permissions in bulk
 	# (see playground/playground/role_profile_permissions.py).
 	"Role Profile": "public/js/role_profile_permissions.js",
+	# Open Order View: on a SUBMITTED Sales Order, render a presentation-only panel
+	# showing pending qty / pending value / completion instead of the original
+	# ordered figures. Draft SOs are untouched. Gated by Playground Settings; the
+	# maths mirrors playground/playground/open_order_view.py.
+	"Sales Order": "public/js/sales_order.js",
 }
 
 # List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk
@@ -36,6 +41,11 @@ doctype_list_js = {
 override_doctype_class = {
 	"Purchase Invoice": "playground.playground.overrides.purchase_invoice.CustomPurchaseInvoice",
 }
+
+# Ship the Open Order View settings (Playground Settings single) to every desk
+# session so the Sales Order client script reads them from frappe.boot with no
+# per-form server round-trip (see playground.playground.open_order_view).
+extend_bootinfo = "playground.playground.open_order_view.boot_open_order_settings"
 
 fixtures = [
 	{

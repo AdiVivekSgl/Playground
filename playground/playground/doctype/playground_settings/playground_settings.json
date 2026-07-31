@@ -1,0 +1,34 @@
+{
+ "doctype": "DocType",
+ "name": "Playground Settings",
+ "module": "Playground",
+ "custom": 0,
+ "issingle": 1,
+ "is_submittable": 0,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1,
+ "description": "App-wide toggles for Playground presentation features. Today it drives the Open Order View on submitted Sales Orders (see playground/public/js/sales_order.js). Settings are shipped to the desk client through the bootinfo, so changes take effect on the next page load with no server round-trip per form.",
+ "field_order": [
+  "open_order_view_section",
+  "enable_pending_view",
+  "highlight_completed_rows",
+  "column_break_oov",
+  "show_original_qty",
+  "show_original_amount",
+  "clamp_negative_pending"
+ ],
+ "fields": [
+  {"fieldname": "open_order_view_section", "fieldtype": "Section Break", "label": "Open Order View (Sales Order)"},
+  {"fieldname": "enable_pending_view", "fieldtype": "Check", "label": "Enable Pending View", "default": "1", "description": "Master switch. When ON, a submitted Sales Order shows the Open Order View panel (pending qty / pending value / completion). When OFF, submitted Sales Orders look exactly like stock ERPNext."},
+  {"fieldname": "highlight_completed_rows", "fieldtype": "Check", "label": "Highlight Completed Rows", "default": "1", "description": "Colour each item row in the Open Order View by fulfilment status (green = fully delivered, amber = partial, blue = not started, grey = cancelled/empty)."},
+  {"fieldname": "column_break_oov", "fieldtype": "Column Break"},
+  {"fieldname": "show_original_qty", "fieldtype": "Check", "label": "Show Original Qty Column", "default": "0", "description": "Also show the original ordered qty alongside the pending qty in the Open Order View. OFF by default so the panel reads as remaining demand."},
+  {"fieldname": "show_original_amount", "fieldtype": "Check", "label": "Show Original Amount Column", "default": "0", "description": "Also show the original ordered amount alongside the pending amount in the Open Order View."},
+  {"fieldname": "clamp_negative_pending", "fieldtype": "Check", "label": "Clamp Negative Pending to Zero", "default": "1", "description": "When over-delivery or returns make pending qty negative, display it as 0. Turn OFF to show the true (negative) remaining figure."}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "print": 1, "email": 1, "share": 1}
+ ]
+}

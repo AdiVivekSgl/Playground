@@ -4,3 +4,4 @@ playground.playground.patches.v0_0.remove_custom_sales_order_statuses
 playground.playground.patches.v0_0.reset_custom_sales_order_status_records
 playground.playground.patches.v0_0.reclass_historical_price_adjustment_debit_notes
 playground.playground.patches.v0_0.remove_custom_expense_customer_fields
+playground.playground.patches.v0_0.remove_role_permission_matrix_doctypes

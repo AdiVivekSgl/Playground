@@ -15,6 +15,10 @@ doctype_js = {
 	# Tool - swap one component item for another across BOMs, raw materials and
 	# sub-assemblies alike (see playground/playground/bom_component_replace.py).
 	"BOM Update Tool": "public/js/bom_update_tool.js",
+	# Role Profile permission workbook: Export/Import a 3-sheet .xlsx (Roles /
+	# Permissions / Roll-up) to review and mirror a profile's permissions in bulk
+	# (see playground/playground/role_profile_permissions.py).
+	"Role Profile": "public/js/role_profile_permissions.js",
 }
 
 # List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk

@@ -1,0 +1,4 @@
+# Holds the ERPNext API secret - never commit.
+config.json
+__pycache__/
+*.pyc

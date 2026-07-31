@@ -1,0 +1,13 @@
+{
+  "site_url": "https://your-site.frappe.cloud",
+  "api_key": "PASTE_API_KEY",
+  "api_secret": "PASTE_API_SECRET",
+  "printer_name": "TSC TTP-244 Pro",
+  "poll_interval_seconds": 12,
+  "label_width_mm": 60,
+  "label_height_mm": 40,
+  "gap_mm": 2,
+  "print_density": 8,
+  "print_speed": 4,
+  "dry_run": false
+}

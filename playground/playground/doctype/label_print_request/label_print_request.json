@@ -1,0 +1,47 @@
+{
+ "doctype": "DocType",
+ "name": "Label Print Request",
+ "module": "Playground",
+ "custom": 0,
+ "is_submittable": 0,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "autoname": "naming_series:",
+ "title_field": "work_order",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1,
+ "description": "Print queue + audit trail for finished-kit labels. One row is created automatically when a Work Order enters 'In Process' (see playground.playground.label_printing). A local print agent polls for Status = Pending rows over the REST API, prints TSPL to the TSC printer, and sets Status = Printed / Failed. Never blocks the Work Order.",
+ "field_order": [
+  "naming_series", "work_order", "production_item", "column_break_hdr", "status", "printed_on",
+  "item_section", "item_code", "item_name", "column_break_item", "company", "batch_no",
+  "print_section", "number_of_labels", "label_template", "column_break_print", "error_log"
+ ],
+ "fields": [
+  {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "LPR-.YYYY.-.#####", "default": "LPR-.YYYY.-.#####", "reqd": 1, "print_hide": 1},
+  {"fieldname": "work_order", "fieldtype": "Link", "options": "Work Order", "label": "Work Order", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1, "description": "The Work Order that triggered this label request."},
+  {"fieldname": "production_item", "fieldtype": "Link", "options": "Item", "label": "Production Item", "in_standard_filter": 1},
+  {"fieldname": "column_break_hdr", "fieldtype": "Column Break"},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Pending\nPrinted\nFailed", "default": "Pending", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1, "description": "Pending: waiting for the print agent. Printed: sent to the printer. Failed: see Error Log; use Reprint to retry."},
+  {"fieldname": "printed_on", "fieldtype": "Datetime", "label": "Printed On", "read_only": 1, "in_list_view": 1, "no_copy": 1},
+
+  {"fieldname": "item_section", "fieldtype": "Section Break", "label": "Item"},
+  {"fieldname": "item_code", "fieldtype": "Data", "label": "Item Code", "in_list_view": 1},
+  {"fieldname": "item_name", "fieldtype": "Data", "label": "Item Name"},
+  {"fieldname": "column_break_item", "fieldtype": "Column Break"},
+  {"fieldname": "company", "fieldtype": "Data", "label": "Company", "description": "Printed on the label as the company name."},
+  {"fieldname": "batch_no", "fieldtype": "Data", "label": "Batch No", "description": "Optional - included on the label if the Work Order carries a batch."},
+
+  {"fieldname": "print_section", "fieldtype": "Section Break", "label": "Print"},
+  {"fieldname": "number_of_labels", "fieldtype": "Int", "label": "Number of Labels", "reqd": 1, "in_list_view": 1, "default": "1", "description": "Work Order Qty x Item's Labels Per Unit."},
+  {"fieldname": "label_template", "fieldtype": "Data", "label": "Label Template", "default": "KIT_LABEL", "description": "Name of the TSPL template the print agent renders (e.g. KIT_LABEL)."},
+  {"fieldname": "column_break_print", "fieldtype": "Column Break"},
+  {"fieldname": "error_log", "fieldtype": "Small Text", "label": "Error Log", "read_only": 1, "no_copy": 1, "description": "Populated by the print agent when a print job fails."}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1},
+  {"role": "Manufacturing Manager", "read": 1, "write": 1, "create": 1, "report": 1, "export": 1},
+  {"role": "Manufacturing User", "read": 1, "write": 1, "create": 1, "report": 1},
+  {"role": "Label Printer", "read": 1, "write": 1}
+ ]
+}

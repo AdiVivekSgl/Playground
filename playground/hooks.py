@@ -15,6 +15,10 @@ doctype_js = {
 	# Tool - swap one component item for another across BOMs, raw materials and
 	# sub-assemblies alike (see playground/playground/bom_component_replace.py).
 	"BOM Update Tool": "public/js/bom_update_tool.js",
+	# Role Profile permission workbook: Export/Import a 3-sheet .xlsx (Roles /
+	# Permissions / Roll-up) to review and mirror a profile's permissions in bulk
+	# (see playground/playground/role_profile_permissions.py).
+	"Role Profile": "public/js/role_profile_permissions.js",
 }
 
 # List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk
@@ -121,6 +125,12 @@ doc_events = {
 		"on_submit": "playground.playground.provision_management.on_journal_entry_submit",
 		"on_cancel": "playground.playground.provision_management.on_journal_entry_cancel",
 	},
+	# Finished Kit Label Printing: when a Work Order reaches "In Process", queue a
+	# Label Print Request for the local print agent to print (idempotent per Work
+	# Order; never blocks the Work Order). See playground.playground.label_printing.
+	"Work Order": {
+		"on_update": "playground.playground.label_printing.on_work_order_update",
+	},
 }
 
 scheduler_events = {
@@ -147,4 +157,8 @@ scheduler_events = {
 # and Journal Entry so it travels with the app (idempotent - runs every migrate).
 after_migrate = [
 	"playground.playground.provision_management.create_provision_custom_fields",
+	# Finished Kit Label Printing: create the Item Master label fields
+	# (custom_enable_finished_label / custom_label_template / custom_labels_per_unit)
+	# and the Label Printer role (idempotent - runs every migrate).
+	"playground.playground.label_printing.setup_label_printing",
 ]

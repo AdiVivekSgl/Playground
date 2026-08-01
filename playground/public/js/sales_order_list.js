@@ -46,9 +46,6 @@ frappe.provide("frappe.listview_settings");
 		"custom_sales_status",
 		"custom_material_status",
 		"custom_needs_attention",
-		// Open Order View list badge - uses the STANDARD stored per_delivered field
-		// (percent delivered by qty) so there's no extra query and no schema change.
-		"per_delivered",
 	]);
 
 	settings.formatters = Object.assign({}, settings.formatters, {
@@ -68,17 +65,6 @@ frappe.provide("frappe.listview_settings");
 				(attention ? "border:2px solid #c62828;" : "") +
 				"padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;";
 			return `<span style="${style}">${label}</span>`;
-		},
-		// Fulfilment badge for the (opt-in) "% Delivered" column. Reads the standard
-		// stored per_delivered field: green = fully delivered, amber = partial,
-		// blue = not started. Value-based Open Value is intentionally NOT computed in
-		// the list view - the item rows aren't in the list query, and computing it
-		// would need the extra round-trips this feature is designed to avoid.
-		per_delivered(value) {
-			const pct = Math.round(flt(value));
-			const color = pct >= 100 ? "green" : pct > 0 ? "orange" : "blue";
-			const label = pct >= 100 ? __("Delivered") : `${pct}% ${__("Delivered")}`;
-			return `<span class="indicator-pill ${color} ellipsis">${label}</span>`;
 		},
 	});
 

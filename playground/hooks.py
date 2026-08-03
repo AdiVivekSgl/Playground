@@ -19,6 +19,10 @@ doctype_js = {
 	# Permissions / Roll-up) to review and mirror a profile's permissions in bulk
 	# (see playground/playground/role_profile_permissions.py).
 	"Role Profile": "public/js/role_profile_permissions.js",
+	# Blanket Order lock: on a Sales Order that draws down a Blanket Order, grey out
+	# rate/discounting + payment-terms fields so only qty is editable (UX mirror of
+	# the validate hook in playground/playground/blanket_order_lock.py).
+	"Sales Order": "public/js/sales_order.js",
 }
 
 # List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk
@@ -107,7 +111,12 @@ fixtures = [
 # Status (see playground/playground/sales_order_hooks.py).
 doc_events = {
 	"Sales Order": {
-		"validate": "playground.playground.sales_order_hooks.on_sales_order_validate",
+		"validate": [
+			"playground.playground.sales_order_hooks.on_sales_order_validate",
+			# Blanket Order lock: pin blanket-line rates to the negotiated rate and
+			# freeze the commercial terms — only qty may change.
+			"playground.playground.blanket_order_lock.enforce_blanket_order_lock",
+		],
 		"on_update": "playground.playground.sales_order_hooks.on_sales_order_update",
 	},
 	"Stock Reservation Entry": {

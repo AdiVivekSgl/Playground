@@ -170,4 +170,7 @@ after_migrate = [
 	# (custom_enable_finished_label / custom_label_template / custom_labels_per_unit)
 	# and the Label Printer role (idempotent - runs every migrate).
 	"playground.playground.label_printing.setup_label_printing",
+	# Sales Order "Ultimate Owner" field below Customer, defaulting to the customer's
+	# name (idempotent - runs every migrate).
+	"playground.playground.sales_order_custom_fields.setup_sales_order_custom_fields",
 ]

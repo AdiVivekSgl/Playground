@@ -8,23 +8,22 @@
  "engine": "InnoDB",
  "autoname": "naming_series:",
  "title_field": "expense_account",
- "description": "Month-end provision (accrual) for a recurring/estimated expense - electricity, bank interest, freight, audit/professional fees, etc. On submit it books the provision Journal Entry (Expense Dr / Provision Cr) and stays Open until actual documents (Purchase Invoice / Journal Entry) are matched against it via their 'Provision Against' link. Supports partial settlement and over/under variance.",
+ "description": "Month-end provision (accrual) for a recurring/estimated expense - electricity, bank interest, freight, audit/professional fees, etc. On submit it books the provision Journal Entry (Expense Dr / Provision Cr) and stays Open. When an actual document (Purchase Invoice / Journal Entry) is linked via its 'Provision Against' field, the provision is reversed IN FULL on that document's date - no partial settlement or variance.",
  "field_order": [
   "naming_series", "company", "posting_date", "column_break_hdr",
-  "status", "reversal_mode",
+  "status",
   "accounts_section", "expense_account", "provision_account", "column_break_acc", "cost_center", "project",
   "party_section", "party_type", "party",
-  "amount_section", "provision_amount", "column_break_amt", "utilized_amount", "outstanding_amount",
-  "settlement_section", "settlements",
-  "reference_section", "provision_journal_entry", "remarks", "amended_from"
+  "amount_section", "provision_amount", "remarks",
+  "reversal_section", "provision_journal_entry", "reversal_journal_entry", "column_break_rev", "reversed_on", "reversed_against_type", "reversed_against",
+  "amended_from"
  ],
  "fields": [
   {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "EXP-PROV-.YYYY.-.#####", "default": "EXP-PROV-.YYYY.-.#####", "reqd": 1},
   {"fieldname": "company", "fieldtype": "Link", "options": "Company", "label": "Company", "reqd": 1, "in_standard_filter": 1},
   {"fieldname": "posting_date", "fieldtype": "Date", "label": "Posting Date", "reqd": 1, "description": "Month-end date the provision is booked on (e.g. 31-Mar)."},
   {"fieldname": "column_break_hdr", "fieldtype": "Column Break"},
-  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Draft\nOpen\nPartially Settled\nSettled\nReversed\nCancelled", "default": "Draft", "read_only": 1, "in_list_view": 1, "in_standard_filter": 1, "allow_on_submit": 1},
-  {"fieldname": "reversal_mode", "fieldtype": "Select", "label": "Reversal Mode", "options": "Match and Settle\nAuto-Reverse", "default": "Match and Settle", "description": "Match and Settle: keep the provision Open and consume it as actual invoices/JEs are linked (explicit provision-to-actual matching). Auto-Reverse: the monthly scheduler reverses any unsettled balance at the start of the next month (classic accrual reversal)."},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Draft\nOpen\nReversed\nCancelled", "default": "Draft", "read_only": 1, "in_list_view": 1, "in_standard_filter": 1, "allow_on_submit": 1},
 
   {"fieldname": "accounts_section", "fieldtype": "Section Break", "label": "Accounts"},
   {"fieldname": "expense_account", "fieldtype": "Link", "options": "Account", "label": "Expense Account", "reqd": 1, "in_list_view": 1, "description": "P&L expense being accrued (Electricity, Interest, Freight, ...)."},
@@ -37,18 +36,18 @@
   {"fieldname": "party_type", "fieldtype": "Link", "options": "Party Type", "label": "Party Type", "description": "Optional - e.g. Supplier for a known vendor, or the bank for interest."},
   {"fieldname": "party", "fieldtype": "Dynamic Link", "options": "party_type", "label": "Party"},
 
-  {"fieldname": "amount_section", "fieldtype": "Section Break", "label": "Amounts"},
-  {"fieldname": "provision_amount", "fieldtype": "Currency", "label": "Provision Amount", "reqd": 1, "in_list_view": 1, "description": "Estimated expense to accrue."},
-  {"fieldname": "column_break_amt", "fieldtype": "Column Break"},
-  {"fieldname": "utilized_amount", "fieldtype": "Currency", "label": "Utilized", "read_only": 1, "allow_on_submit": 1, "description": "Sum of amounts consumed by linked actual documents."},
-  {"fieldname": "outstanding_amount", "fieldtype": "Currency", "label": "Outstanding", "read_only": 1, "allow_on_submit": 1, "in_list_view": 1, "description": "Provision Amount less Utilized."},
-
-  {"fieldname": "settlement_section", "fieldtype": "Section Break", "label": "Settlements"},
-  {"fieldname": "settlements", "fieldtype": "Table", "options": "Expense Provision Settlement", "label": "Settlements", "read_only": 1, "allow_on_submit": 1, "description": "One row per actual document matched against this provision (added automatically when a Purchase Invoice / Journal Entry linking this provision is submitted)."},
-
-  {"fieldname": "reference_section", "fieldtype": "Section Break", "label": "Reference"},
-  {"fieldname": "provision_journal_entry", "fieldtype": "Link", "options": "Journal Entry", "label": "Provision Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The Expense Dr / Provision Cr entry auto-created on submit."},
+  {"fieldname": "amount_section", "fieldtype": "Section Break", "label": "Amount"},
+  {"fieldname": "provision_amount", "fieldtype": "Currency", "label": "Provision Amount", "reqd": 1, "in_list_view": 1, "description": "Estimated expense to accrue. Reversed in full when an actual document is linked."},
   {"fieldname": "remarks", "fieldtype": "Small Text", "label": "Remarks"},
+
+  {"fieldname": "reversal_section", "fieldtype": "Section Break", "label": "Provision / Reversal"},
+  {"fieldname": "provision_journal_entry", "fieldtype": "Link", "options": "Journal Entry", "label": "Provision Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The Expense Dr / Provision Cr entry auto-created on submit."},
+  {"fieldname": "reversal_journal_entry", "fieldtype": "Link", "options": "Journal Entry", "label": "Reversal Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The full Provision Dr / Expense Cr reversal, auto-created when an actual document is linked."},
+  {"fieldname": "column_break_rev", "fieldtype": "Column Break"},
+  {"fieldname": "reversed_on", "fieldtype": "Date", "label": "Reversed On", "read_only": 1, "allow_on_submit": 1, "no_copy": 1},
+  {"fieldname": "reversed_against_type", "fieldtype": "Select", "label": "Reversed Against Type", "options": "\nPurchase Invoice\nJournal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1},
+  {"fieldname": "reversed_against", "fieldtype": "Dynamic Link", "options": "reversed_against_type", "label": "Reversed Against", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The actual document (Purchase Invoice / Journal Entry) that triggered the full reversal."},
+
   {"fieldname": "amended_from", "fieldtype": "Link", "options": "Expense Provision", "label": "Amended From", "read_only": 1, "no_copy": 1, "print_hide": 1}
  ],
  "permissions": [

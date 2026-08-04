@@ -3,23 +3,21 @@
 
 frappe.ui.form.on("Expense Provision", {
 	refresh(frm) {
-		if (frm.doc.docstatus === 1 && !["Settled", "Reversed", "Cancelled"].includes(frm.doc.status)) {
-			frm.add_custom_button(__("Refresh Status"), () => {
-				frappe.call({
-					method: "playground.playground.doctype.expense_provision.expense_provision.refresh_status",
-					args: { provision_name: frm.doc.name },
-					freeze: true,
-					callback: () => frm.reload_doc(),
-				});
-			});
-		}
-
-		// Status indicator colour, matching the settlement lifecycle.
+		// Status indicator colour, matching the lifecycle.
 		const colour = {
-			Draft: "grey", Open: "orange", "Partially Settled": "yellow",
-			Settled: "green", Reversed: "blue", Cancelled: "red",
+			Draft: "grey", Open: "orange", Reversed: "blue", Cancelled: "red",
 		}[frm.doc.status];
 		if (colour) frm.page.set_indicator(__(frm.doc.status), colour);
+
+		// Quick links to the booked entries.
+		if (frm.doc.provision_journal_entry) {
+			frm.add_custom_button(__("Provision JE"), () =>
+				frappe.set_route("Form", "Journal Entry", frm.doc.provision_journal_entry), __("View"));
+		}
+		if (frm.doc.reversal_journal_entry) {
+			frm.add_custom_button(__("Reversal JE"), () =>
+				frappe.set_route("Form", "Journal Entry", frm.doc.reversal_journal_entry), __("View"));
+		}
 	},
 
 	company(frm) {

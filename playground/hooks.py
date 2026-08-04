@@ -23,6 +23,10 @@ doctype_js = {
 	# rate/discounting + payment-terms fields so only qty is editable (UX mirror of
 	# the validate hook in playground/playground/blanket_order_lock.py).
 	"Sales Order": "public/js/sales_order.js",
+	# Provision Management: filter the "Provision Against" link to open (un-reversed)
+	# provisions of the same company (see playground/public/js/provision_link.js).
+	"Purchase Invoice": "public/js/provision_link.js",
+	"Journal Entry": "public/js/provision_link.js",
 }
 
 # List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk
@@ -127,8 +131,9 @@ doc_events = {
 		"on_submit": "playground.playground.sales_order_hooks.recompute_from_snapshot",
 	},
 	# Provision Management: a Journal Entry linking an open Expense Provision
-	# (custom_provision_against) settles it from the JE's own posting. Purchase
-	# Invoice settlement is handled in the CustomPurchaseInvoice override above.
+	# (custom_provision_against) reverses that provision IN FULL on submit (and
+	# reopens it on cancel). Purchase Invoice is handled in the
+	# CustomPurchaseInvoice override above.
 	"Journal Entry": {
 		"validate": "playground.playground.provision_management.on_journal_entry_validate",
 		"on_submit": "playground.playground.provision_management.on_journal_entry_submit",
@@ -145,11 +150,6 @@ doc_events = {
 scheduler_events = {
 	"hourly": [
 		"playground.playground.sales_order_hooks.recompute_all_open_so_material_status",
-	],
-	# Auto-Reverse mode: reverse any unsettled balance of last month's provisions
-	# at the start of the new month (classic accrual reversal).
-	"monthly": [
-		"playground.playground.provision_management.auto_reverse_due_provisions",
 	],
 	# Refresh BOM valuations on the 1st of every month: fire an "Update Cost"
 	# across all BOMs (same as the BOM Update Tool button). "0 2 1 * *" =

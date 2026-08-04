@@ -6,3 +6,4 @@ playground.playground.patches.v0_0.reclass_historical_price_adjustment_debit_not
 playground.playground.patches.v0_0.remove_custom_expense_customer_fields
 playground.playground.patches.v0_0.remove_role_permission_matrix_doctypes
 playground.playground.patches.v0_0.remove_playground_settings_doctype
+playground.playground.patches.v0_0.drop_expense_provision_settlement

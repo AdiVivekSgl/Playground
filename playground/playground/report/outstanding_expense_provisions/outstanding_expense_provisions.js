@@ -34,11 +34,11 @@ frappe.query_reports["Outstanding Expense Provisions"] = {
 			fieldname: "status",
 			label: __("Status"),
 			fieldtype: "Select",
-			options: "\nOpen\nPartially Settled\nSettled\nReversed",
+			options: "\nOpen\nReversed\nCancelled",
 		},
 		{
-			fieldname: "outstanding_only",
-			label: __("Outstanding Only"),
+			fieldname: "open_only",
+			label: __("Open Only"),
 			fieldtype: "Check",
 			default: 1,
 		},
@@ -46,12 +46,9 @@ frappe.query_reports["Outstanding Expense Provisions"] = {
 
 	formatter(value, row, column, data, default_formatter) {
 		value = default_formatter(value, row, column, data);
-		if (column.fieldname === "outstanding" && data && flt(data.outstanding) > 0.01) {
+		// Highlight the still-accrued (Open) amount.
+		if (column.fieldname === "open_amount" && data && flt(data.open_amount) > 0.01) {
 			value = `<span style="color:var(--text-on-orange,#b45309);font-weight:600">${value}</span>`;
-		}
-		if (column.fieldname === "variance" && data && Math.abs(flt(data.variance)) > 0.01) {
-			const c = flt(data.variance) > 0 ? "red" : "green";
-			value = `<span style="color:var(--${c}-500,${c})">${value}</span>`;
 		}
 		return value;
 	},

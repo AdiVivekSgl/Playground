@@ -5,8 +5,8 @@
 Expense Provision
 =================
 
-A generic month-end provision (accrual) for a recurring / estimated expense -
-electricity, bank interest, freight, audit fees, professional fees, etc.
+A month-end provision (accrual) for a recurring / estimated expense - electricity,
+bank interest, freight, audit fees, professional fees, etc.
 
 Lifecycle
 ---------
@@ -18,33 +18,18 @@ Lifecycle
      and status becomes Open.
 
   2. When the actual document arrives, the user links this provision from it via
-     the "Provision Against" field:
-       - Purchase Invoice  -> settlement + GL reclass handled in the PI override
-         (playground.playground.overrides.purchase_invoice).
-       - Journal Entry      -> settlement tracked from the JE's own posting
-         (playground.playground.provision_management).
-     Each linked, submitted document appends a row to `settlements`, and
-     `utilized_amount` / `outstanding_amount` / `status` recompute here.
+     the "Provision Against" field (Purchase Invoice or Journal Entry). On submit
+     of that document the provision is reversed IN FULL on its posting date:
 
-  3. Status walks Open -> Partially Settled -> Settled as the outstanding balance
-     is consumed. Over-provision (actual > provision) books the excess to the
-     expense account on the actual document; under-provision leaves a positive
-     outstanding balance you can see in the Outstanding Expense Provisions report.
+         Provision for Electricity  Dr  1,00,000
+             Electricity Expense        Cr  1,00,000
 
-Reversal mode
--------------
-  - "Match and Settle" (default): keep the provision Open until actuals are matched
-    - explicit provision-to-invoice matching.
-  - "Auto-Reverse": the monthly scheduler reverses any unsettled balance at the
-    start of the next month (classic accrual reversal). See
-    playground.playground.provision_management.auto_reverse_due_provisions.
+     status becomes Reversed. The actual document books its own expense normally -
+     no partial settlement, no variance. See
+     playground.playground.provision_management.
 
-VERIFY ON YOUR BENCH (ERPNext v15 - not inspectable from this repo):
-  - Journal Entry field names used here: `voucher_type`, `posting_date`,
-    `company`, `user_remark`, and account rows `account` / `debit_in_account_currency`
-    / `credit_in_account_currency` / `cost_center` / `project` / `party_type` / `party`.
-  - That the provision & expense accounts belong to `company` and are not Group
-    accounts (validated below, but confirm your CoA setup).
+     The link field only offers Open provisions and each provision reverses
+     exactly once; cancelling the triggering document reopens the provision.
 """
 
 import frappe
@@ -52,16 +37,12 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
 
-from playground.playground.provision_management import party_kwargs, recompute_provision
+from playground.playground.provision_management import party_kwargs
 
 
 class ExpenseProvision(Document):
 	def validate(self):
 		self._validate_accounts()
-		# In draft, keep the rollups honest for display; the authoritative
-		# recompute happens through recompute_provision() as settlements land.
-		self.utilized_amount = sum(flt(s.settled_amount) for s in self.settlements)
-		self.outstanding_amount = flt(self.provision_amount) - flt(self.utilized_amount)
 		if self.docstatus == 0:
 			self.status = "Draft"
 
@@ -89,12 +70,12 @@ class ExpenseProvision(Document):
 		self.db_set("status", "Open")
 
 	def on_cancel(self):
-		# Don't let a provision be cancelled out from under actuals that were matched
-		# against it - unwind those first so the GL stays coherent.
-		if self.settlements:
+		# A reversed provision is tied to a submitted actual document - unwind that
+		# first (cancelling it reopens the provision), then cancel the provision.
+		if self.status == "Reversed":
 			frappe.throw(
-				_("This provision has {0} settlement(s). Cancel the linked actual document(s) first.").format(
-					len(self.settlements)
+				_("This provision is already reversed against {0}. Cancel that document first.").format(
+					self.reversed_against
 				)
 			)
 		self._cancel_provision_je()
@@ -142,14 +123,3 @@ class ExpenseProvision(Document):
 		if je.docstatus == 1:
 			je.flags.ignore_permissions = True
 			je.cancel()
-
-
-@frappe.whitelist()
-def refresh_status(provision_name):
-	"""Manual recompute hook (button / console) - re-derives utilized, outstanding
-	and status from the current settlement rows."""
-	recompute_provision(provision_name)
-	return frappe.db.get_value(
-		"Expense Provision", provision_name,
-		["status", "utilized_amount", "outstanding_amount"], as_dict=True,
-	)

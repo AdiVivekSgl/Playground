@@ -5,18 +5,14 @@
 Outstanding Expense Provisions
 ==============================
 
-Provisions by month and expense account with provisioned amount, amount utilized,
-balance outstanding, actual expense booked, variance and age. Filter to
-outstanding-only to surface accruals that were never settled - the year-end view
-that flags provisions to write back or chase.
+Expense Provisions by month and expense account, showing which are still Open
+(un-reversed) versus Reversed, and - for the Open ones - how long they have been
+sitting (age). The year-end view: filter to Open only to find provisions that were
+booked but never actioned by an actual document.
 
-  - Provisioned  : Expense Provision.provision_amount
-  - Utilized      : sum of settlement rows (provision consumed by actuals)
-  - Outstanding   : Provisioned - Utilized
-  - Actual        : Utilized + over-provision variance = total actual expense
-                    matched against the provision so far
-  - Variance      : Actual - Provisioned (positive = actuals exceeded the estimate)
-  - Age (days)    : today - posting_date, for ageing unsettled provisions
+A provision reverses in full the moment an actual document is linked to it, so
+there is no partial / outstanding balance - a provision is simply Open (full
+amount still accrued) or Reversed (fully unwound against `reversed_against`).
 """
 
 import frappe
@@ -29,40 +25,31 @@ def execute(filters=None):
 	if not filters.get("company"):
 		frappe.throw(_("Please select a Company."))
 
-	rows = _fetch(filters)
-	return get_columns(), rows
-
-
-def _fetch(filters):
 	conds = {"docstatus": 1, "company": filters.company}
 	if filters.get("expense_account"):
 		conds["expense_account"] = filters.expense_account
 	if filters.get("from_date") and filters.get("to_date"):
 		conds["posting_date"] = ["between", [filters.from_date, filters.to_date]]
-	if filters.get("status"):
+	if filters.get("open_only"):
+		conds["status"] = "Open"
+	elif filters.get("status"):
 		conds["status"] = filters.status
-	if filters.get("outstanding_only"):
-		conds["status"] = ["in", ["Open", "Partially Settled"]]
 
 	provisions = frappe.get_all(
 		"Expense Provision",
 		filters=conds,
 		fields=[
 			"name", "posting_date", "expense_account", "provision_account",
-			"party_type", "party", "cost_center",
-			"provision_amount", "utilized_amount", "outstanding_amount", "status",
+			"party_type", "party", "cost_center", "provision_amount", "status",
+			"reversed_on", "reversed_against_type", "reversed_against",
 		],
 		order_by="posting_date, expense_account, name",
 	)
 
-	# Actual = utilized + total over-provision variance recorded on the settlements.
-	variance_by_provision = _settlement_variance(p.name for p in provisions)
-
 	today = getdate(nowdate())
 	data = []
 	for p in provisions:
-		over_variance = flt(variance_by_provision.get(p.name))
-		actual = flt(p.utilized_amount) + over_variance
+		is_open = p.status == "Open"
 		data.append({
 			"provision": p.name,
 			"posting_date": p.posting_date,
@@ -71,31 +58,16 @@ def _fetch(filters):
 			"provision_account": p.provision_account,
 			"party": p.party,
 			"cost_center": p.cost_center,
-			"provisioned": flt(p.provision_amount),
-			"utilized": flt(p.utilized_amount),
-			"outstanding": flt(p.outstanding_amount),
-			"actual": actual,
-			"variance": actual - flt(p.provision_amount),
-			"age": date_diff(today, p.posting_date) if p.posting_date else None,
+			"provision_amount": flt(p.provision_amount),
+			"open_amount": flt(p.provision_amount) if is_open else 0.0,
 			"status": p.status,
+			"reversed_on": p.reversed_on,
+			"reversed_against": p.reversed_against,
+			# Age: for Open provisions, how long the accrual has been un-actioned.
+			"age": date_diff(today, p.posting_date) if (is_open and p.posting_date) else None,
 		})
-	return data
 
-
-def _settlement_variance(provision_names):
-	"""Sum of the (over-provision) variance recorded on settlement rows, per parent."""
-	names = list(provision_names)
-	if not names:
-		return {}
-	rows = frappe.get_all(
-		"Expense Provision Settlement",
-		filters={"parenttype": "Expense Provision", "parent": ["in", names]},
-		fields=["parent", "variance"],
-	)
-	out = {}
-	for r in rows:
-		out[r.parent] = out.get(r.parent, 0.0) + flt(r.variance)
-	return out
+	return get_columns(), data
 
 
 def get_columns():
@@ -107,11 +79,10 @@ def get_columns():
 		{"label": _("Provision Account"), "fieldname": "provision_account", "fieldtype": "Link", "options": "Account", "width": 200},
 		{"label": _("Party"), "fieldname": "party", "fieldtype": "Data", "width": 130},
 		{"label": _("Cost Center"), "fieldname": "cost_center", "fieldtype": "Link", "options": "Cost Center", "width": 130},
-		{"label": _("Provisioned"), "fieldname": "provisioned", "fieldtype": "Currency", "width": 120},
-		{"label": _("Utilized"), "fieldname": "utilized", "fieldtype": "Currency", "width": 120},
-		{"label": _("Outstanding"), "fieldname": "outstanding", "fieldtype": "Currency", "width": 120},
-		{"label": _("Actual"), "fieldname": "actual", "fieldtype": "Currency", "width": 120},
-		{"label": _("Variance"), "fieldname": "variance", "fieldtype": "Currency", "width": 110},
+		{"label": _("Provision Amount"), "fieldname": "provision_amount", "fieldtype": "Currency", "width": 130},
+		{"label": _("Open Amount"), "fieldname": "open_amount", "fieldtype": "Currency", "width": 120},
+		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 100},
+		{"label": _("Reversed On"), "fieldname": "reversed_on", "fieldtype": "Date", "width": 100},
+		{"label": _("Reversed Against"), "fieldname": "reversed_against", "fieldtype": "Data", "width": 160},
 		{"label": _("Age (Days)"), "fieldname": "age", "fieldtype": "Int", "width": 90},
-		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 120},
 	]

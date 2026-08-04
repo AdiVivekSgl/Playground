@@ -41,12 +41,12 @@
   {"fieldname": "remarks", "fieldtype": "Small Text", "label": "Remarks"},
 
   {"fieldname": "reversal_section", "fieldtype": "Section Break", "label": "Provision / Reversal"},
-  {"fieldname": "provision_journal_entry", "fieldtype": "Link", "options": "Journal Entry", "label": "Provision Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The Expense Dr / Provision Cr entry auto-created on submit."},
-  {"fieldname": "reversal_journal_entry", "fieldtype": "Link", "options": "Journal Entry", "label": "Reversal Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The full Provision Dr / Expense Cr reversal, auto-created when an actual document is linked."},
+  {"fieldname": "provision_journal_entry", "fieldtype": "Data", "label": "Provision Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "Name of the Expense Dr / Provision Cr entry auto-created on submit. Stored as text (not a hard Link) so the JE can be cancelled without an 'is linked with' error."},
+  {"fieldname": "reversal_journal_entry", "fieldtype": "Data", "label": "Reversal Journal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "Name of the full Provision Dr / Expense Cr reversal, auto-created when an actual document is linked. Stored as text (not a hard Link) so the JE can be cancelled freely."},
   {"fieldname": "column_break_rev", "fieldtype": "Column Break"},
   {"fieldname": "reversed_on", "fieldtype": "Date", "label": "Reversed On", "read_only": 1, "allow_on_submit": 1, "no_copy": 1},
   {"fieldname": "reversed_against_type", "fieldtype": "Select", "label": "Reversed Against Type", "options": "\nPurchase Invoice\nJournal Entry", "read_only": 1, "allow_on_submit": 1, "no_copy": 1},
-  {"fieldname": "reversed_against", "fieldtype": "Dynamic Link", "options": "reversed_against_type", "label": "Reversed Against", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "The actual document (Purchase Invoice / Journal Entry) that triggered the full reversal."},
+  {"fieldname": "reversed_against", "fieldtype": "Data", "label": "Reversed Against", "read_only": 1, "allow_on_submit": 1, "no_copy": 1, "description": "Name of the actual document (Purchase Invoice / Journal Entry) that triggered the full reversal. Stored as text (not a hard Link) so that document can be cancelled without an 'is linked with' error."},
 
   {"fieldname": "amended_from", "fieldtype": "Link", "options": "Expense Provision", "label": "Amended From", "read_only": 1, "no_copy": 1, "print_hide": 1}
  ],

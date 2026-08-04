@@ -32,9 +32,18 @@ Wiring:
     (playground.playground.overrides.purchase_invoice).
   - Journal Entry     -> doc_events in hooks.py.
 
-The reversal is posted as its own linked Journal Entry (not injected into the
-triggering document's GL), so it is explicit, auditable, and cancels cleanly when
-the triggering document is cancelled.
+The reversal is posted as its own Journal Entry (not injected into the triggering
+document's GL), so it is explicit, auditable, and cancels cleanly when the
+triggering document is cancelled.
+
+Expense Provision references its Journal Entries and the triggering document by
+NAME in plain Data fields (provision_journal_entry / reversal_journal_entry /
+reversed_against), NOT as Link / Dynamic Link. That is deliberate: a hard Link
+would make ERPNext block cancellation of those JEs / documents with an "is linked
+with Expense Provision" error (and would even break the auto-undo below, which
+cancels the reversal JE). Storing the name as text decouples them, so the JEs and
+the triggering document can be cancelled freely; the auto-undo still finds them by
+name.
 
 LINK FIELD (`custom_provision_against`) is created on Purchase Invoice and Journal
 Entry by create_provision_custom_fields() (after_migrate in hooks.py).

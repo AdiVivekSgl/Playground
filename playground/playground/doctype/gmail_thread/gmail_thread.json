@@ -1,0 +1,111 @@
+{
+ "doctype": "DocType",
+ "name": "Gmail Thread",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "By fieldname",
+ "autoname": "field:gmail_thread_id",
+ "title_field": "subject",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "fields": [
+  {
+   "fieldname": "gmail_thread_id",
+   "fieldtype": "Data",
+   "label": "Gmail Thread ID",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "The bridge key. Ties one Gmail conversation to one CRM opportunity so a reply re-opens the right context."
+  },
+  {
+   "fieldname": "subject",
+   "fieldtype": "Data",
+   "label": "Subject",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Unlinked\nLinked\nIgnored",
+   "default": "Unlinked",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "participants",
+   "fieldtype": "Small Text",
+   "label": "Participants",
+   "description": "Comma-separated emails seen on the thread."
+  },
+  {
+   "fieldname": "links_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "crm_opportunity",
+   "fieldtype": "Link",
+   "label": "CRM Opportunity",
+   "options": "CRM Opportunity"
+  },
+  {
+   "fieldname": "crm_contact",
+   "fieldtype": "Link",
+   "label": "CRM Contact",
+   "options": "CRM Contact"
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Customer"
+  },
+  {
+   "fieldname": "contact",
+   "fieldtype": "Link",
+   "label": "Contact",
+   "options": "Contact"
+  },
+  {
+   "fieldname": "sync_section",
+   "fieldtype": "Section Break",
+   "label": "Sync"
+  },
+  {
+   "fieldname": "last_message",
+   "fieldtype": "Small Text",
+   "label": "Last Message"
+  },
+  {
+   "fieldname": "last_message_date",
+   "fieldtype": "Datetime",
+   "label": "Last Message Date"
+  },
+  {
+   "fieldname": "last_synced",
+   "fieldtype": "Datetime",
+   "label": "Last Synced"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "role": "Sales User",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  }
+ ]
+}

@@ -1,0 +1,94 @@
+{
+ "doctype": "DocType",
+ "name": "CRM Contact",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "By fieldname",
+ "autoname": "field:email",
+ "title_field": "contact_name",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "fields": [
+  {
+   "fieldname": "email",
+   "fieldtype": "Data",
+   "options": "Email",
+   "label": "Email",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "The Gmail identity key. All sidebar matching starts from this address (lower-cased on save)."
+  },
+  {
+   "fieldname": "contact_name",
+   "fieldtype": "Data",
+   "label": "Contact Name",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "email_domain",
+   "fieldtype": "Data",
+   "label": "Email Domain",
+   "read_only": 1,
+   "description": "Derived from email on save. Powers the company-level (domain) fallback match."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Unmapped\nMapped\nIgnored",
+   "default": "Unmapped",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "erpnext_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "erpnext_customer",
+   "fieldtype": "Link",
+   "label": "ERPNext Customer",
+   "options": "Customer"
+  },
+  {
+   "fieldname": "erpnext_contact",
+   "fieldtype": "Link",
+   "label": "ERPNext Contact",
+   "options": "Contact"
+  },
+  {
+   "fieldname": "erpnext_lead",
+   "fieldtype": "Link",
+   "label": "ERPNext Lead",
+   "options": "Lead"
+  },
+  {
+   "fieldname": "sales_owner",
+   "fieldtype": "Link",
+   "label": "Sales Owner",
+   "options": "User",
+   "description": "Owning sales rep. Named sales_owner because owner is a reserved Frappe field."
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "role": "Sales User",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  }
+ ]
+}

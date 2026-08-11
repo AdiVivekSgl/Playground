@@ -1,0 +1,126 @@
+{
+ "doctype": "DocType",
+ "name": "CRM Activity",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "Expression (old style)",
+ "autoname": "ACT-.#####",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "activity_datetime",
+ "sort_order": "DESC",
+ "fields": [
+  {
+   "fieldname": "activity_type",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "Email\nNote\nCall\nMeeting\nFollow-up\nERPNext Transaction",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "activity_datetime",
+   "fieldtype": "Datetime",
+   "label": "Date / Time",
+   "default": "Now",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "label": "User",
+   "options": "User"
+  },
+  {
+   "fieldname": "links_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "crm_opportunity",
+   "fieldtype": "Link",
+   "label": "CRM Opportunity",
+   "options": "CRM Opportunity",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Customer"
+  },
+  {
+   "fieldname": "contact",
+   "fieldtype": "Link",
+   "label": "Contact",
+   "options": "Contact"
+  },
+  {
+   "fieldname": "gmail_thread_id",
+   "fieldtype": "Data",
+   "label": "Gmail Thread ID"
+  },
+  {
+   "fieldname": "description_section",
+   "fieldtype": "Section Break",
+   "label": "Description"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "follow_up_section",
+   "fieldtype": "Section Break",
+   "label": "Follow-up"
+  },
+  {
+   "fieldname": "follow_up_date",
+   "fieldtype": "Date",
+   "label": "Follow-up Date",
+   "description": "Set when activity_type is Follow-up."
+  },
+  {
+   "fieldname": "follow_up_status",
+   "fieldtype": "Select",
+   "label": "Follow-up Status",
+   "options": "\nOpen\nCompleted"
+  },
+  {
+   "fieldname": "reference_section",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Reference"
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "label": "Reference DocType",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Reference Name",
+   "options": "reference_doctype"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "role": "Sales User",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  }
+ ]
+}

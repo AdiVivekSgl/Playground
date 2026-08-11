@@ -1,4 +1,8 @@
 # patches go here
+[pre_model_sync]
+playground.playground.patches.v0_0.create_crm_sales_user_role
+
+[post_model_sync]
 playground.playground.patches.v0_0.allow_zero_planned_qty_production_plan
 playground.playground.patches.v0_0.remove_custom_sales_order_statuses
 playground.playground.patches.v0_0.reset_custom_sales_order_status_records

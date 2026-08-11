@@ -1,0 +1,137 @@
+{
+ "doctype": "DocType",
+ "name": "CRM Opportunity",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "Expression (old style)",
+ "autoname": "OPP-.#####",
+ "title_field": "opportunity_name",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "fields": [
+  {
+   "fieldname": "opportunity_name",
+   "fieldtype": "Data",
+   "label": "Opportunity Name",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Customer",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "contact",
+   "fieldtype": "Link",
+   "label": "Contact",
+   "options": "Contact"
+  },
+  {
+   "fieldname": "crm_contact",
+   "fieldtype": "Link",
+   "label": "CRM Contact",
+   "options": "CRM Contact"
+  },
+  {
+   "fieldname": "sales_owner",
+   "fieldtype": "Link",
+   "label": "Sales Owner",
+   "options": "User"
+  },
+  {
+   "fieldname": "pipeline_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "value",
+   "fieldtype": "Currency",
+   "label": "Value",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "stage",
+   "fieldtype": "Select",
+   "label": "Stage",
+   "options": "New\nContacted\nRequirement\nQuotation\nNegotiation\nPO Expected\nWon\nLost",
+   "default": "New",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Open\nWon\nLost",
+   "default": "Open",
+   "read_only": 1,
+   "description": "Derived from stage on save: Won/Lost mirror the stage, everything else is Open."
+  },
+  {
+   "fieldname": "probability",
+   "fieldtype": "Percent",
+   "label": "Probability"
+  },
+  {
+   "fieldname": "expected_closing",
+   "fieldtype": "Date",
+   "label": "Expected Closing"
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "label": "Source",
+   "options": "Gmail\nManual\nReferral\nOther",
+   "default": "Gmail"
+  },
+  {
+   "fieldname": "next_action_section",
+   "fieldtype": "Section Break",
+   "label": "Next Action"
+  },
+  {
+   "fieldname": "next_action",
+   "fieldtype": "Small Text",
+   "label": "Next Action"
+  },
+  {
+   "fieldname": "next_action_date",
+   "fieldtype": "Date",
+   "label": "Next Action Date"
+  },
+  {
+   "fieldname": "erpnext_section",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Link"
+  },
+  {
+   "fieldname": "erpnext_opportunity",
+   "fieldtype": "Link",
+   "label": "ERPNext Opportunity",
+   "options": "Opportunity",
+   "description": "Optional bridge if this pipeline entry is promoted to a native ERPNext Opportunity."
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "role": "Sales User",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  }
+ ]
+}

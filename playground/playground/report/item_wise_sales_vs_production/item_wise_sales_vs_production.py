@@ -32,8 +32,10 @@ independent of ``sold_since``. So the same item list can be compared across peri
   dated and carry the FG valuation, unlike the cumulative, undated
   ``Work Order.produced_qty``.
 * **Projected Sale Value** - ``Produced Qty x avg realized sale price``, where the
-  average price is ``Sale Value / Sale Qty`` for that item in the range. Items
-  produced but not sold in the range project to 0.
+  average price is ``Sale Value / Sale Qty`` for that item in the range. When the
+  item was produced in the range but not sold within it, the price falls back to
+  the item's average realized price over the universe window (sales since
+  ``sold_since``), which always resolves for a reported item.
 
 Money is aggregated in company currency (``base_*`` fields).
 """
@@ -61,8 +63,9 @@ def execute(filters=None):
 	sales = get_sales(filters)
 	production = get_production(filters)
 	valuation = get_valuation_map(filters)
+	reference = get_reference_prices(filters)
 
-	rows = build_rows(universe, sales, production, valuation)
+	rows = build_rows(universe, sales, production, valuation, reference)
 	return get_columns(), rows
 
 
@@ -137,6 +140,49 @@ def get_sales(filters):
 		as_dict=True,
 	)
 	return {d.item_code: d for d in data}
+
+
+# --------------------------------------------------------------------------- #
+# 2b. Reference sale price - Projected Sale Value fallback
+# --------------------------------------------------------------------------- #
+
+def get_reference_prices(filters):
+	"""Average realized sale price per item over the *item-universe* window
+	(``posting_date >= sold_since``).
+
+	Used as the Projected Sale Value fallback: an item produced within the range
+	but not sold within it has no in-range average price, which would otherwise
+	leave Projected Sale Value blank. Because every reported item is, by
+	construction, one that sold since ``sold_since``, this window guarantees at
+	least one sale line - so the fallback reliably resolves without depending on
+	a maintained Selling price list.
+	"""
+	params = {"sold_since": filters.get("sold_since")}
+	conditions = _sales_scope(filters, params)
+
+	data = frappe.db.sql(
+		"""
+		SELECT
+			sii.item_code            AS item_code,
+			SUM(sii.qty)             AS sale_qty,
+			SUM(sii.base_net_amount) AS sale_value
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		WHERE si.docstatus = 1
+			AND si.posting_date >= %(sold_since)s
+			{conditions}
+		GROUP BY sii.item_code
+		""".format(conditions=conditions),
+		params,
+		as_dict=True,
+	)
+
+	rates = {}
+	for d in data:
+		qty = flt(d.sale_qty)
+		if qty > 0:
+			rates[d.item_code] = flt(d.sale_value) / qty
+	return rates
 
 
 # --------------------------------------------------------------------------- #
@@ -223,7 +269,7 @@ def get_valuation_map(filters):
 # 5. Merge + derived columns + grand total
 # --------------------------------------------------------------------------- #
 
-def build_rows(universe, sales, production, valuation):
+def build_rows(universe, sales, production, valuation, reference):
 	rows = []
 	for item_code in universe:
 		s = sales.get(item_code)
@@ -235,7 +281,12 @@ def build_rows(universe, sales, production, valuation):
 		production_value = flt(p.production_value) if p else 0.0
 
 		cogs = sale_qty * valuation.get(item_code, 0.0)
-		avg_sale_rate = (sale_value / sale_qty) if sale_qty else 0.0
+		# Prefer the in-range realized price; fall back to the average price since
+		# `sold_since` so items produced-but-not-sold in the range still project.
+		if sale_qty:
+			avg_sale_rate = sale_value / sale_qty
+		else:
+			avg_sale_rate = reference.get(item_code, 0.0)
 		projected_sale_value = produced_qty * avg_sale_rate
 
 		rows.append({

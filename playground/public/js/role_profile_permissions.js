@@ -64,34 +64,35 @@ function rpp_show_diff(frm, file_url, d) {
 		primary_action_label: __("Apply Changes"),
 		primary_action() {
 			dlg.hide();
-			rpp_apply(frm, file_url);
+			// Pass the previewed file's hash so the backend rejects a swapped file.
+			rpp_apply(frm, file_url, d.file_hash);
 		},
 	});
 	dlg.fields_dict.body.$wrapper.html(rpp_render(d));
 	dlg.show();
 }
 
-function rpp_apply(frm, file_url) {
+function rpp_apply(frm, file_url, expected_hash) {
 	frappe.call({
 		method: `${RPP_METHOD}.apply_import`,
-		args: { role_profile: frm.doc.name, file_url },
+		args: { role_profile: frm.doc.name, file_url, expected_hash },
 		freeze: true,
 		freeze_message: __("Applying changes…"),
 		callback(r) {
 			const m = r.message || {};
 			if (!m.success) return;
 			frm.reload_doc();
-			frappe.msgprint({
-				title: __("Applied"),
-				indicator: "green",
-				message: __("Roles +{0} / -{1}. Permissions: {2} added, {3} updated, {4} removed.", [
-					m.membership_added,
-					m.membership_removed,
-					m.perms_added,
-					m.perms_updated,
-					m.perms_removed,
-				]),
-			});
+			const profiles = (m.profiles_touched || []).join(", ");
+			let msg = __("Roles +{0} / -{1}. Permissions: {2} added, {3} updated, {4} removed.", [
+				m.membership_added,
+				m.membership_removed,
+				m.perms_added,
+				m.perms_updated,
+				m.perms_removed,
+			]);
+			if (profiles) msg += "<br>" + __("Profiles updated: {0}.", [frappe.utils.escape_html(profiles)]);
+			if (m.log) msg += "<br>" + __("Logged as {0}.", [frappe.utils.escape_html(m.log)]);
+			frappe.msgprint({ title: __("Applied"), indicator: "green", message: msg });
 		},
 	});
 }
@@ -102,9 +103,15 @@ function rpp_render(d) {
 	const esc = frappe.utils.escape_html;
 	const parts = [];
 
+	const memberships = d.memberships || [];
+	const memberRemovals = memberships.filter((m) => m.remove.length);
+	const memberAdditions = memberships.filter((m) => m.add.length && !m.is_new);
+	const newProfiles = memberships.filter((m) => m.is_new);
+
 	const nothing =
-		!d.membership.add.length &&
-		!d.membership.remove.length &&
+		!memberRemovals.length &&
+		!memberAdditions.length &&
+		!newProfiles.length &&
 		!d.perm_add.length &&
 		!d.perm_update.length &&
 		!d.perm_remove.length;
@@ -113,15 +120,15 @@ function rpp_render(d) {
 	}
 
 	// Deletions first, loudly.
-	if (d.membership.remove.length || d.perm_remove.length) {
+	if (memberRemovals.length || d.perm_remove.length) {
 		const rows = [];
-		if (d.membership.remove.length) {
+		memberRemovals.forEach((m) => {
 			rows.push(
-				`<li><strong>${__("Roles removed from this profile")}:</strong> ${d.membership.remove
+				`<li><strong>${__("Roles removed from {0}", [esc(m.profile)])}:</strong> ${m.remove
 					.map(esc)
 					.join(", ")}</li>`
 			);
-		}
+		});
 		if (d.perm_remove.length) {
 			rows.push(
 				`<li><strong>${__("Permissions removed")} (${d.perm_remove.length}):</strong><br>${rpp_perm_lines(
@@ -137,10 +144,21 @@ function rpp_render(d) {
 		);
 	}
 
+	// New profiles that will be created from the sheet.
+	newProfiles.forEach((m) => {
+		parts.push(
+			`<p><strong>${__("New profile {0} will be created", [esc(m.profile)])}</strong>${
+				m.final.length ? ` ${__("with roles")}: ${m.final.map(esc).join(", ")}` : ""
+			}</p>`
+		);
+	});
+
 	// Additions / updates.
-	if (d.membership.add.length) {
-		parts.push(`<p><strong>${__("Roles added to profile")}:</strong> ${d.membership.add.map(esc).join(", ")}</p>`);
-	}
+	memberAdditions.forEach((m) => {
+		parts.push(
+			`<p><strong>${__("Roles added to {0}", [esc(m.profile)])}:</strong> ${m.add.map(esc).join(", ")}</p>`
+		);
+	});
 	if (d.perm_add.length) {
 		parts.push(
 			`<p><strong>${__("Permissions added")} (${d.perm_add.length}):</strong><br>${rpp_perm_lines(d.perm_add)}</p>`

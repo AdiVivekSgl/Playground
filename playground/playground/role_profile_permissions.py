@@ -9,8 +9,21 @@ playground/public/js/role_profile_permissions.js. System Manager only.
 NOTE ON SCOPE: a Role's permissions are global. Editing a role here changes it for
 every profile and user that holds it — the workbook is organised by profile purely
 for convenience. The client's confirmation dialog surfaces that blast radius.
+
+MULTI-PROFILE MEMBERSHIP: the Roles sheet may carry an optional "Role Profiles"
+column (a comma-separated list per role). When present, membership is synced for
+every profile named there — not just the anchor profile the export was launched
+from. The anchor is fully mirrored to the sheet; other referenced profiles are
+updated only for the roles the sheet actually lists (their other members are left
+untouched), and a referenced profile that does not exist yet is created. When the
+column is absent the workbook behaves exactly as a single-profile mirror.
+
+SAFETY: every apply is recorded in a "Role Profile Permission Log" (who / when /
+which file + sha256 / the full diff), and the workbook's hash is checked between
+preview and apply so a file swapped in between can't be applied silently.
 """
 
+import hashlib
 from io import BytesIO
 
 import frappe
@@ -36,7 +49,7 @@ SHEET_ROLES = "Roles"
 SHEET_PERMISSIONS = "Permissions"
 SHEET_ROLLUP = "Roll-up"
 
-ROLES_HEADERS = ["Role"]
+ROLES_HEADERS = ["Role", "Role Profiles"]
 PERM_HEADERS = ["Role", "Document Type", "Level", "If Owner"] + [RIGHT_LABELS[r] for r in RIGHTS]
 ROLLUP_HEADERS = ["Document Type", "Level", "If Owner"] + [RIGHT_LABELS[r] for r in RIGHTS] + ["Granted By"]
 
@@ -60,12 +73,13 @@ def export_workbook(role_profile):
 
 	wb = openpyxl.Workbook()
 
-	# Sheet 1 — Roles in the profile.
+	# Sheet 1 — Roles in the profile, with every profile each role currently holds
+	# (so the "Role Profiles" column round-trips real multi-profile membership).
 	ws_roles = wb.active
 	ws_roles.title = SHEET_ROLES
 	ws_roles.append(ROLES_HEADERS)
 	for role in roles:
-		ws_roles.append([role])
+		ws_roles.append([role, ", ".join(_profiles_of_role(role))])
 
 	# Sheet 2 — one row per Role x DocType x Level x If Owner, full flag set.
 	ws_perms = wb.create_sheet(SHEET_PERMISSIONS)
@@ -123,32 +137,54 @@ def export_workbook(role_profile):
 @frappe.whitelist()
 def preview_import(role_profile, file_url):
 	"""Parse the uploaded workbook and return the diff against live state. Writes
-	nothing — the client renders this for confirmation."""
+	nothing — the client renders this for confirmation. The returned `file_hash`
+	must be passed back to apply_import so a swapped file is rejected."""
 	frappe.only_for("System Manager")
-	roles, perms = _read_workbook(file_url)
-	return _build_diff(role_profile, roles, perms)
+	wb = _read_workbook(file_url)
+	diff = _build_diff(role_profile, wb["roles"], wb["membership"], wb["perms"])
+	if diff.get("ok"):
+		diff["file_hash"] = wb["hash"]
+		diff["file_name"] = wb["filename"]
+	return diff
 
 
 @frappe.whitelist()
-def apply_import(role_profile, file_url):
-	"""Re-parse the workbook and mirror it onto ERPNext: sync the profile's roles,
-	then add/update/remove Custom DocPerm rows for the roles in the Permissions
-	sheet. Only DocTypes that actually change are touched (each is converted to
-	custom perms first, preserving existing standard perms), and the permission
-	cache is cleared for them."""
+def apply_import(role_profile, file_url, expected_hash=None):
+	"""Re-parse the workbook and mirror it onto ERPNext: sync role-profile
+	membership (anchor + any profiles named in the Roles sheet), then add/update/
+	remove Custom DocPerm rows for the roles in the Permissions sheet. Only DocTypes
+	that actually change are touched (each is converted to custom perms first,
+	preserving existing standard perms), and the permission cache is cleared for
+	them. Every apply is written to a Role Profile Permission Log."""
 	frappe.only_for("System Manager")
-	roles, perms = _read_workbook(file_url)
-	diff = _build_diff(role_profile, roles, perms)
+	wb = _read_workbook(file_url)
+	if expected_hash and expected_hash != wb["hash"]:
+		frappe.throw(
+			_("The workbook changed since it was previewed. Please review the changes again before applying."),
+			title=_("Workbook Changed"),
+		)
+
+	diff = _build_diff(role_profile, wb["roles"], wb["membership"], wb["perms"])
 	if not diff.get("ok"):
 		frappe.throw("<br>".join(diff.get("errors", [])), title=_("Import Validation Failed"))
 
-	# 1. Role Profile membership (exact mirror of the Roles sheet).
-	if diff["membership"]["add"] or diff["membership"]["remove"]:
-		profile = frappe.get_doc("Role Profile", role_profile)
+	# 1. Role Profile membership. The anchor is a full mirror of the sheet; other
+	#    referenced profiles are updated only for the roles the sheet lists.
+	roles_added = roles_removed = 0
+	for m in diff["memberships"]:
+		if m["is_new"]:
+			profile = frappe.get_doc({"doctype": "Role Profile", "role_profile": m["profile"]})
+		else:
+			profile = frappe.get_doc("Role Profile", m["profile"])
 		profile.set("roles", [])
-		for role in roles:
+		for role in m["final"]:
 			profile.append("roles", {"role": role})
-		profile.save()  # Frappe core propagates the profile's roles to its users
+		if m["is_new"]:
+			profile.insert()  # a brand-new profile named only in the sheet
+		else:
+			profile.save()  # Frappe core propagates the profile's roles to its users
+		roles_added += len(m["add"])
+		roles_removed += len(m["remove"])
 
 	# 2. Permissions. Convert only the changing DocTypes to custom perms up front.
 	affected = {item["doctype"] for item in diff["perm_add"] + diff["perm_update"] + diff["perm_remove"]}
@@ -165,19 +201,49 @@ def apply_import(role_profile, file_url):
 	for dt in affected:
 		frappe.clear_cache(doctype=dt)
 
+	# 3. Audit trail — who applied which file (name + hash) and exactly what changed.
+	log = _write_audit_log(role_profile, file_url, wb, diff, roles_added, roles_removed)
+
 	return {
 		"success": True,
-		"membership_added": len(diff["membership"]["add"]),
-		"membership_removed": len(diff["membership"]["remove"]),
+		"membership_added": roles_added,
+		"membership_removed": roles_removed,
 		"perms_added": len(diff["perm_add"]),
 		"perms_updated": len(diff["perm_update"]),
 		"perms_removed": len(diff["perm_remove"]),
+		"profiles_touched": [m["profile"] for m in diff["memberships"]],
+		"log": log,
 	}
 
 
-def _build_diff(role_profile, desired_roles, desired_perms):
+def _write_audit_log(role_profile, file_url, wb, diff, roles_added, roles_removed):
+	profiles_touched = [m["profile"] for m in diff["memberships"]]
+	doc = frappe.get_doc({
+		"doctype": "Role Profile Permission Log",
+		"role_profile": role_profile,
+		"profiles_touched": ", ".join(profiles_touched),
+		"applied_by": frappe.session.user,
+		"applied_on": frappe.utils.now_datetime(),
+		"file_name": wb["filename"],
+		"file_hash": wb["hash"],
+		"workbook": file_url,
+		"roles_added": roles_added,
+		"roles_removed": roles_removed,
+		"perms_added": len(diff["perm_add"]),
+		"perms_updated": len(diff["perm_update"]),
+		"perms_removed": len(diff["perm_remove"]),
+		"diff_json": frappe.as_json(diff),
+	})
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+
+def _build_diff(role_profile, desired_roles, membership_map, desired_perms):
 	"""Compare the workbook against live state. Returns a structured diff, or
-	{ok: False, errors: [...]} if the sheet references unknown roles/doctypes."""
+	{ok: False, errors: [...]} if the sheet references unknown roles/doctypes.
+
+	`membership_map` is either None (Roles sheet has no "Role Profiles" column ->
+	single-profile mirror) or {role: set(profile_names)}."""
 	if not frappe.db.exists("Role Profile", role_profile):
 		return {"ok": False, "errors": [_("Role Profile {0} not found.").format(frappe.utils.escape_html(role_profile))]}
 
@@ -191,10 +257,8 @@ def _build_diff(role_profile, desired_roles, desired_perms):
 	if errors:
 		return {"ok": False, "errors": errors}
 
-	# Membership (exact mirror).
-	current_roles = _profile_roles(role_profile)
-	membership_add = [r for r in desired_roles if r not in current_roles]
-	membership_remove = [r for r in current_roles if r not in desired_roles]
+	# Membership (per profile — anchor mirrored fully, others scoped to sheet roles).
+	memberships = _membership_diffs(role_profile, desired_roles, membership_map)
 
 	# Permissions. Scope = roles named anywhere in the Permissions sheet, so a role
 	# whose rows are all unticked still has its live perms removed. Only rows that
@@ -224,10 +288,14 @@ def _build_diff(role_profile, desired_roles, desired_perms):
 				perm_remove.append({"role": role, "doctype": dt, "level": lvl, "if_owner": ifo})
 
 	# Global blast radius per affected role.
-	affected_roles = sorted(set(scope_roles) | set(membership_add) | set(membership_remove))
+	edited_profiles = {m["profile"] for m in memberships} | {role_profile}
+	membership_roles = set()
+	for m in memberships:
+		membership_roles |= set(m["add"]) | set(m["remove"])
+	affected_roles = sorted(set(scope_roles) | membership_roles)
 	impact = {
 		role: {
-			"other_profiles": _other_profiles_count(role, role_profile),
+			"other_profiles": _other_profiles_count(role, edited_profiles),
 			"users": _users_with_role_count(role),
 		}
 		for role in affected_roles
@@ -236,12 +304,69 @@ def _build_diff(role_profile, desired_roles, desired_perms):
 	return {
 		"ok": True,
 		"role_profile": role_profile,
-		"membership": {"add": membership_add, "remove": membership_remove},
+		"memberships": memberships,
 		"perm_add": perm_add,
 		"perm_update": perm_update,
 		"perm_remove": perm_remove,
 		"impact": impact,
 	}
+
+
+def _membership_diffs(role_profile, desired_roles, membership_map):
+	"""One membership diff per profile in play. Returns [{profile, is_new, add,
+	remove, final}] for the profiles whose membership actually changes (or that
+	must be created).
+
+	- Anchor profile: a full mirror of the Roles sheet.
+	- Other profiles referenced in the "Role Profiles" column: updated only for the
+	  roles the sheet lists; their other members are preserved. Created if missing.
+	"""
+	sheet_roles = []
+	seen = set()
+	for r in desired_roles:
+		if r not in seen:
+			seen.add(r)
+			sheet_roles.append(r)
+	sheet_set = set(sheet_roles)
+
+	if membership_map is None:
+		# Legacy single-profile mode: every listed role belongs to the anchor.
+		profiles = {role_profile}
+
+		def profiles_of(role):
+			return {role_profile}
+	else:
+		profiles = {role_profile}
+		for profs in membership_map.values():
+			profiles |= set(profs)
+
+		def profiles_of(role):
+			return membership_map.get(role, set())
+
+	out = []
+	for profile in sorted(profiles):
+		is_new = not frappe.db.exists("Role Profile", profile)
+		current = set() if is_new else set(_profile_roles(profile))
+		desired_here = {r for r in sheet_roles if profile in profiles_of(r)}
+
+		if profile == role_profile:
+			# Full mirror: the anchor ends up as exactly the sheet's desired set.
+			final = set(desired_here)
+		else:
+			# Scoped: only the roles the sheet lists may join/leave this profile.
+			final = (current - sheet_set) | desired_here
+
+		add = sorted(final - current)
+		remove = sorted(current - final)
+		if add or remove or is_new:
+			out.append({
+				"profile": profile,
+				"is_new": is_new,
+				"add": add,
+				"remove": remove,
+				"final": sorted(final),
+			})
+	return out
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +381,12 @@ def _profile_roles(role_profile):
 			seen.add(d.role)
 			out.append(d.role)
 	return out
+
+
+def _profiles_of_role(role):
+	"""Every Role Profile that currently grants `role`, sorted."""
+	parents = frappe.get_all("Has Role", filters={"parenttype": "Role Profile", "role": role}, distinct=True, pluck="parent")
+	return sorted(set(parents))
 
 
 def _effective_perms(role):
@@ -300,9 +431,9 @@ def _delete_custom_perm(doctype, role, permlevel, if_owner):
 		frappe.delete_doc("Custom DocPerm", name, ignore_permissions=True, force=True)
 
 
-def _other_profiles_count(role, current_profile):
+def _other_profiles_count(role, exclude_profiles):
 	parents = frappe.get_all("Has Role", filters={"parenttype": "Role Profile", "role": role}, distinct=True, pluck="parent")
-	return len({p for p in parents if p != current_profile})
+	return len({p for p in parents if p not in exclude_profiles})
 
 
 def _users_with_role_count(role):
@@ -318,24 +449,61 @@ def _read_workbook(file_url):
 	import openpyxl
 	from frappe.utils.file_manager import get_file
 
-	_name, content = get_file(file_url)
+	filename, content = get_file(file_url)
+	if isinstance(content, str):
+		content = content.encode("utf-8", "surrogateescape")
+	digest = hashlib.sha256(content).hexdigest()
+
 	wb = openpyxl.load_workbook(BytesIO(content), data_only=True, read_only=True)
-	return _read_roles_sheet(wb), _read_perms_sheet(wb)
+	roles, membership = _read_roles_sheet(wb)
+	perms = _read_perms_sheet(wb)
+	return {"filename": filename, "hash": digest, "roles": roles, "membership": membership, "perms": perms}
 
 
 def _read_roles_sheet(wb):
+	"""Return (roles, membership). `membership` is None when the sheet has no
+	"Role Profiles" column (single-profile mirror), else {role: set(profiles)}."""
 	if SHEET_ROLES not in wb.sheetnames:
 		frappe.throw(_("The workbook has no '{0}' sheet.").format(SHEET_ROLES))
 	ws = wb[SHEET_ROLES]
+
+	role_idx = 0
+	profiles_idx = None
 	seen, out = set(), []
+	membership = {}
+	has_profiles_col = False
+
 	for i, row in enumerate(ws.iter_rows(values_only=True)):
-		if i == 0 or not row:
+		if i == 0:
+			header = {
+				str(v).strip().lower(): idx
+				for idx, v in enumerate(row or [])
+				if v is not None and str(v).strip()
+			}
+			role_idx = header.get("role", 0)
+			for key in ("role profiles", "role profile", "profiles", "profile"):
+				if key in header:
+					profiles_idx = header[key]
+					has_profiles_col = True
+					break
 			continue
-		val = _text(row[0]) if len(row) else ""
-		if val and val not in seen:
-			seen.add(val)
-			out.append(val)
-	return out
+		if not row:
+			continue
+
+		role = _text(row[role_idx]) if role_idx < len(row) else ""
+		if not role:
+			continue
+		if role not in seen:
+			seen.add(role)
+			out.append(role)
+
+		if profiles_idx is not None and profiles_idx < len(row):
+			profs = _split_profiles(row[profiles_idx])
+			membership.setdefault(role, set()).update(profs)
+		elif has_profiles_col:
+			membership.setdefault(role, set())
+
+	return out, (membership if has_profiles_col else None)
 
 
 def _read_perms_sheet(wb):
@@ -372,6 +540,12 @@ def _read_perms_sheet(wb):
 			right: _as_check(cell(RIGHT_LABELS[right].lower(), right)) for right in RIGHTS
 		}
 	return out
+
+
+def _split_profiles(v):
+	if v is None:
+		return []
+	return [p.strip() for p in str(v).replace(";", ",").split(",") if p.strip()]
 
 
 def _text(v):

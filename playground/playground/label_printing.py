@@ -59,6 +59,30 @@ def on_work_order_update(doc, method=None):
 		frappe.log_error(frappe.get_traceback(), "Label Print Request creation failed")
 
 
+def on_stock_entry_submit(doc, method=None):
+	"""Stock Entry.on_submit hook.
+
+	A Work Order only reaches "In Process" when a material-transfer Stock Entry is
+	submitted against it - and ERPNext flips the Work Order's status with `db_set`
+	(inside Work Order.update_status), which writes straight to the DB and does NOT
+	fire Work Order.on_update. So relying on on_update alone never catches the real
+	transition. We also react to the Stock Entry that caused it: reload the Work
+	Order (its status is now up to date) and try to queue its label request.
+
+	Same guarantees as the Work Order path: errors are logged and swallowed so a
+	labelling hiccup can never roll back a Stock Entry, and the dedup guard in
+	_maybe_create_label_request keeps it print-once even though both hooks may fire.
+	"""
+	try:
+		work_order = doc.get("work_order")
+		if not work_order:
+			return
+		wo = frappe.get_doc("Work Order", work_order)
+		_maybe_create_label_request(wo)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Label Print Request creation failed (stock entry)")
+
+
 def _maybe_create_label_request(doc):
 	if doc.status != IN_PROCESS:
 		return

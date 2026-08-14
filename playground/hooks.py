@@ -142,8 +142,17 @@ doc_events = {
 	# Finished Kit Label Printing: when a Work Order reaches "In Process", queue a
 	# Label Print Request for the local print agent to print (idempotent per Work
 	# Order; never blocks the Work Order). See playground.playground.label_printing.
+	#
+	# ERPNext sets the Work Order status to "In Process" with db_set (which does NOT
+	# fire Work Order.on_update), so the real trigger is the material-transfer Stock
+	# Entry submit. We hook both: Stock Entry.on_submit catches the automatic
+	# transition, and Work Order.on_update catches any manual status change. The
+	# dedup guard keeps it print-once even when both fire.
 	"Work Order": {
 		"on_update": "playground.playground.label_printing.on_work_order_update",
+	},
+	"Stock Entry": {
+		"on_submit": "playground.playground.label_printing.on_stock_entry_submit",
 	},
 }
 

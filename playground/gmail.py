@@ -7,6 +7,9 @@ actions. ERPNext stays the commercial system of record — financials (YTD sales
 last order, quotations) are read live from native doctypes and never duplicated
 into the CRM layer.
 
+get_context resolves EVERY external participant on the thread (not just the first
+sender) and ignores internal staff addresses (default domain: frontec.co.in).
+
 Dotted path: playground.gmail.<method>  (e.g. /api/method/playground.gmail.get_context)
 """
 
@@ -26,6 +29,10 @@ PUBLIC_DOMAINS = {
 	"aol.com",
 	"protonmail.com",
 }
+
+# Internal staff domains excluded from participant matching (comma-separated
+# override accepted per-request via the internal_domains argument).
+INTERNAL_DOMAINS_DEFAULT = "frontec.co.in"
 
 
 # ---------------------------------------------------------------------------
@@ -245,109 +252,88 @@ def _domain_customers(domain):
 	return customers
 
 
-# ---------------------------------------------------------------------------
-# read path
-# ---------------------------------------------------------------------------
+def _primary_domain(emails):
+	"""Most common non-public domain among the addresses (for the account header)."""
+	counts = {}
+	for e in emails:
+		dom = e.split("@")[-1] if "@" in e else None
+		if not dom or dom in PUBLIC_DOMAINS:
+			continue
+		counts[dom] = counts.get(dom, 0) + 1
+	if counts:
+		return max(counts, key=counts.get)
+	# Fall back to the first address's domain, even if public.
+	for e in emails:
+		if "@" in e:
+			return e.split("@")[-1]
+	return None
 
-@frappe.whitelist()
-def get_context(thread_id=None, sender=None, participants=None):
-	"""Identify the CRM context behind an open Gmail thread.
 
-	Returns match_status one of: linked | matched | domain_only | unknown_contact.
+def _resolve_contact(email):
+	"""Map one email to a contact entry: known (linked to ERPNext/CRM) or not.
+
+	Known ERPNext contacts get their CRM Contact mapping cached on the fly;
+	unknown addresses are left for the explicit Create Contact action.
 	"""
-	sender = _norm_email(sender)
-	domain = sender.split("@")[-1] if "@" in sender else None
-
-	result = {
-		"match_status": "unknown_contact",
+	email = _norm_email(email)
+	entry = {
+		"email": email,
+		"contact_name": None,
+		"crm_contact": None,
+		"erpnext_contact": None,
 		"customer": None,
-		"contact": None,
-		"opportunities": [],
-		"quotations": [],
-		"activities": [],
-		"thread": None,
-		"domain_candidates": [],
+		"customer_name": None,
+		"erpnext_url": None,
+		"known": False,
 	}
 
-	# 1) Fast path — thread recognition.
-	if thread_id and frappe.db.exists("Gmail Thread", thread_id):
-		thread = frappe.get_doc("Gmail Thread", thread_id)
-		if thread.status == "Linked":
-			result["match_status"] = "linked"
-			result["customer"] = _customer_block(thread.customer)
-			result["contact"] = _contact_block(thread.contact, sender)
-			result["opportunities"] = _open_opportunities(
-				customer=thread.customer, crm_contact=thread.crm_contact
-			)
-			result["quotations"] = _quotations(thread.customer)
-			result["activities"] = _recent_activities(
-				customer=thread.customer, crm_opportunity=thread.crm_opportunity
-			)
-			result["thread"] = _thread_block(thread)
-			return result
-
-	# 2) Contact match — CRM Contact by email.
-	crm_contact = None
-	if sender:
-		crm_contact = frappe.db.get_value(
-			"CRM Contact",
-			{"email": sender},
-			["name", "erpnext_customer", "erpnext_contact"],
-			as_dict=True,
+	cc = frappe.db.get_value(
+		"CRM Contact",
+		{"email": email},
+		["name", "contact_name", "erpnext_contact", "erpnext_customer"],
+		as_dict=True,
+	)
+	if cc:
+		entry.update(
+			crm_contact=cc.name,
+			contact_name=cc.contact_name,
+			erpnext_contact=cc.erpnext_contact,
+			customer=cc.erpnext_customer,
+			known=True,
 		)
-
-	# 3) ERPNext fallback — resolve native Contact -> Customer, then map it.
-	if not crm_contact and sender:
-		native_contact, native_customer = _find_native_customer_by_email(sender)
+	else:
+		native_contact, native_customer = _find_native_customer_by_email(email)
 		if native_contact or native_customer:
-			crm_contact = _create_crm_contact_mapping(
-				email=sender,
+			mapping = _create_crm_contact_mapping(
+				email=email,
 				erpnext_contact=native_contact,
 				erpnext_customer=native_customer,
 			)
+			entry.update(
+				crm_contact=mapping["name"],
+				erpnext_contact=native_contact,
+				customer=native_customer,
+				known=True,
+			)
+			if native_contact:
+				parts = frappe.db.get_value(
+					"Contact", native_contact, ["first_name", "last_name"], as_dict=True
+				)
+				if parts:
+					entry["contact_name"] = " ".join(
+						p for p in [parts.first_name, parts.last_name] if p
+					)
 
-	if crm_contact:
-		customer = crm_contact.get("erpnext_customer")
-		contact = crm_contact.get("erpnext_contact")
-		thread = _upsert_thread(
-			thread_id,
-			participants=participants,
-			crm_contact=crm_contact.get("name"),
-			customer=customer,
-			contact=contact,
-		)
-		result["match_status"] = "matched"
-		result["customer"] = _customer_block(customer)
-		result["contact"] = _contact_block(contact, sender)
-		result["opportunities"] = _open_opportunities(
-			customer=customer, crm_contact=crm_contact.get("name")
-		)
-		result["quotations"] = _quotations(customer)
-		result["activities"] = _recent_activities(customer=customer)
-		result["thread"] = _thread_block(thread) if thread else None
-		return result
+	if entry["customer"]:
+		entry["customer_name"] = frappe.db.get_value("Customer", entry["customer"], "customer_name")
+	if entry["erpnext_contact"]:
+		entry["erpnext_url"] = _erpnext_url("Contact", entry["erpnext_contact"])
+	elif entry["crm_contact"]:
+		entry["erpnext_url"] = _erpnext_url("CRM Contact", entry["crm_contact"])
 
-	# 4) Domain fallback — surface the account, never auto-link.
-	candidates = _domain_customers(domain)
-	if candidates:
-		result["match_status"] = "domain_only"
-		result["domain_candidates"] = candidates
-		return result
-
-	# 5) Unknown.
-	return result
-
-
-def _contact_block(contact, sender=None):
-	if not contact:
-		return {"name": None, "contact_name": None, "email": sender, "erpnext_url": None}
-	contact_name = frappe.db.get_value("Contact", contact, "first_name") or contact
-	return {
-		"name": contact,
-		"contact_name": contact_name,
-		"email": sender,
-		"erpnext_url": _erpnext_url("Contact", contact),
-	}
+	if not entry["contact_name"]:
+		entry["contact_name"] = email.split("@")[0]
+	return entry
 
 
 def _thread_block(thread):
@@ -358,6 +344,110 @@ def _thread_block(thread):
 		"crm_opportunity": thread.crm_opportunity,
 		"status": thread.status,
 	}
+
+
+# ---------------------------------------------------------------------------
+# read path
+# ---------------------------------------------------------------------------
+
+@frappe.whitelist()
+def get_context(thread_id=None, sender=None, participants=None, internal_domains=None):
+	"""Identify the CRM context behind an open Gmail thread.
+
+	Resolves every external participant, ignoring internal staff addresses.
+	Returns the account (customer or domain) on top plus one entry per contact.
+	match_status: linked | matched | domain_only | unknown_contact.
+	"""
+	internal = {
+		d.strip().lower()
+		for d in (internal_domains or INTERNAL_DOMAINS_DEFAULT).split(",")
+		if d.strip()
+	}
+
+	# Gather + clean addresses from participants and the (optional) sender.
+	raw = []
+	if participants:
+		raw.extend(participants.split(","))
+	if sender:
+		raw.append(sender)
+
+	emails = []
+	seen = set()
+	for e in raw:
+		e = _norm_email(e)
+		if not e or "@" not in e:
+			continue
+		if e.split("@")[-1] in internal:
+			continue
+		if e in seen:
+			continue
+		seen.add(e)
+		emails.append(e)
+
+	contacts = [_resolve_contact(e) for e in emails]
+	domain = _primary_domain(emails)
+
+	result = {
+		"match_status": "unknown_contact",
+		"account": {"type": "domain", "domain": domain, "customer": None},
+		"contacts": contacts,
+		"opportunities": [],
+		"quotations": [],
+		"activities": [],
+		"domain_candidates": [],
+		"thread": None,
+	}
+
+	# Thread fast-path: a previously linked conversation fixes the account.
+	thread_doc = None
+	linked_opp = None
+	primary_customer = None
+	if thread_id and frappe.db.exists("Gmail Thread", thread_id):
+		thread_doc = frappe.get_doc("Gmail Thread", thread_id)
+		if thread_doc.status == "Linked":
+			primary_customer = thread_doc.customer
+			linked_opp = thread_doc.crm_opportunity
+
+	# Otherwise pick the most frequently referenced customer among participants.
+	if not primary_customer:
+		counts = {}
+		for c in contacts:
+			if c["customer"]:
+				counts[c["customer"]] = counts.get(c["customer"], 0) + 1
+		if counts:
+			primary_customer = max(counts, key=counts.get)
+
+	if primary_customer:
+		is_linked = bool(thread_doc and thread_doc.status == "Linked")
+		result["match_status"] = "linked" if is_linked else "matched"
+		result["account"] = {
+			"type": "customer",
+			"domain": domain,
+			"customer": _customer_block(primary_customer),
+		}
+		result["opportunities"] = _open_opportunities(customer=primary_customer)
+		result["quotations"] = _quotations(primary_customer)
+		result["activities"] = _recent_activities(
+			customer=primary_customer, crm_opportunity=linked_opp
+		)
+	else:
+		candidates = _domain_customers(domain)
+		if candidates:
+			result["match_status"] = "domain_only"
+			result["domain_candidates"] = candidates
+
+	# Keep the thread bridge fresh (store participants + best-known links).
+	first_known = next((c for c in contacts if c["known"]), None)
+	thread = _upsert_thread(
+		thread_id,
+		participants=",".join(emails) if emails else None,
+		customer=primary_customer,
+		contact=first_known["erpnext_contact"] if first_known else None,
+		crm_contact=first_known["crm_contact"] if first_known else None,
+	)
+	result["thread"] = _thread_block(thread) if thread else None
+
+	return result
 
 
 # ---------------------------------------------------------------------------

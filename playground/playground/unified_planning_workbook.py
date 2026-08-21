@@ -26,10 +26,11 @@ are in-cell formulas so the workbook stays live when edited):
   1. "FG Reservation Status"        - the FGSRM picture per open SO line: Pending,
                                        Reserved, Short to Complete (=Pending−Reserved,
                                        formula), Item Free Stock, Suggested Prodn,
-                                       Material / Sales Status.
+                                       Material / Sales Status, Pending Dispatch Value.
   2. "Production Requirement"       - per-SO-line production ask: Suggested,
                                        Committed, Valuation Rate, Committed Value
-                                       (=Committed×Rate, formula).
+                                       (=Committed×Valuation Rate, formula), Sale Value
+                                       of Committed Prodn (=Committed×unit sale price).
   3. "Consolidated Requirement"     - per-item roll-up: Item Free Stock, Total
                                        Suggested, Committed Prodn (the plan's own
                                        root po_items, authoritative for both entry
@@ -41,6 +42,13 @@ are in-cell formulas so the workbook stays live when edited):
                                        Shortage formula:
                                          Shortage = MAX(0, Qty As Per BOM − Qty In Stock
                                            − Projected Incoming − Ordered + Reserved).
+                                       Plus an Inventory Rate column (STOCK_WAREHOUSE
+                                       valuation rate — the same source as sheet 2's
+                                       col G); the TOTAL row carries SUMPRODUCT(Qty As
+                                       Per BOM, Inventory Rate) at the foot of the Qty
+                                       column = the requirement's total inventory value.
+  4b. "Unique Item Requirement"     - the Item Requirement rows deduped to one row per
+                                       item, with Qty As Per BOM summed across levels.
   5. "Approved for Purchase"        - the buy-list: purchasable items' shortage
                                        aggregated once per item, with a manual Buffer
                                        column (Total Qty = Short Qty + Buffer). Column
@@ -130,6 +138,7 @@ def download_unified_planning_workbook(plan, filters=None, snapshot=None):
     _build_production_requirement_sheet(wb, lines)
     _build_consolidated_requirement_sheet(wb, lines, committed_by_item)
     _build_item_requirement_sheet(wb, mr_rows)
+    _build_unique_item_requirement_sheet(wb, mr_rows)
     _build_approved_for_purchase_sheet(wb, mr_rows)
 
     stream = BytesIO()
@@ -422,6 +431,7 @@ def _build_fg_status_sheet(wb, lines):
         "Material Status",      # J
         "Sales Status",         # K
         "Source",               # L
+        "Pending Dispatch Value",  # M  (sale value of the pending-to-dispatch qty)
     ]
     _write_header(ws, headers)
 
@@ -439,6 +449,7 @@ def _build_fg_status_sheet(wb, lines):
         ws.cell(r, 10, line.get("material_status"))
         ws.cell(r, 11, line.get("sales_status"))
         ws.cell(r, 12, line.get("source"))
+        ws.cell(r, 13, flt(line.get("pending_value")))  # Pending Dispatch Value
         r += 1
 
     # TOTAL row - sum only the columns that legitimately add up (Item Free Stock is
@@ -449,6 +460,7 @@ def _build_fg_status_sheet(wb, lines):
             5: sum(flt(l.get("pending_qty")) for l in lines),
             6: sum(flt(l.get("reserved_qty")) for l in lines),
             9: sum(flt(l.get("suggested_prodn")) for l in lines),
+            13: sum(flt(l.get("pending_value")) for l in lines),
         })
     _autosize(ws, headers)
 
@@ -467,7 +479,8 @@ def _build_production_requirement_sheet(wb, lines):
         "Suggested Prodn",  # E
         "Committed Prodn",  # F
         "Valuation Rate",   # G
-        "Committed Value",  # H  (formula: Committed × Rate)
+        "Committed Value",  # H  (formula: Committed × Valuation Rate)
+        "Sale Value of Committed Prodn",  # I  (Committed × unit sale price)
     ]
     _write_header(ws, headers)
 
@@ -480,7 +493,13 @@ def _build_production_requirement_sheet(wb, lines):
         ws.cell(r, 5, flt(line.get("suggested_prodn")))
         ws.cell(r, 6, flt(line.get("committed_prodn")))
         ws.cell(r, 7, flt(line.get("valuation_rate")))
-        ws.cell(r, 8, "=F{r}*G{r}".format(r=r))  # Committed Value = Committed × Rate
+        ws.cell(r, 8, "=F{r}*G{r}".format(r=r))  # Committed Value = Committed × Valuation Rate
+        # Sale Value of Committed Prodn = Committed × the SO line's unit sale price
+        # (pending_value / pending_qty). WPS/snapshot lines carry no selling rate, so
+        # this is 0 there - matching sheet 1's Pending Dispatch Value.
+        pending_qty = flt(line.get("pending_qty"))
+        sale_rate = (flt(line.get("pending_value")) / pending_qty) if pending_qty else 0.0
+        ws.cell(r, 9, flt(line.get("committed_prodn")) * sale_rate)
         r += 1
 
     if lines:
@@ -490,6 +509,7 @@ def _build_production_requirement_sheet(wb, lines):
             5: sum(flt(l.get("suggested_prodn")) for l in lines),
             6: sum(flt(l.get("committed_prodn")) for l in lines),
             8: "=SUM(H2:H{last})".format(last=last),
+            9: "=SUM(I2:I{last})".format(last=last),
         })
     _autosize(ws, headers)
 
@@ -574,6 +594,7 @@ def _build_item_requirement_sheet(wb, mr_rows):
         "Projected Incoming from Open WO",  # G  (fetched)
         "Incoming Purchase (Ordered Qty)",  # H
         "Shortage",                         # I  (formula)
+        "Inventory Rate",                   # J  (STOCK_WAREHOUSE valuation rate — same as sheet 2 col G)
     ]
     _write_header(ws, headers)
 
@@ -585,6 +606,9 @@ def _build_item_requirement_sheet(wb, mr_rows):
     po_pending = _pending_po_map(item_codes)                        # H: outstanding PO qty
     reserved_wo = _reserved_against_open_wo_map(item_codes)         # F
     incoming_wo = _projected_incoming_from_open_wo_map(item_codes)  # G
+    # J "Inventory Rate" uses the same source as sheet 2 col G: the STOCK_WAREHOUSE
+    # Bin valuation rate (get_stock_map), so the two sheets never disagree on rate.
+    stock_map = get_stock_map(item_codes)
 
     r = 2  # data starts at row 2 (headers on row 1)
     for row in mr_rows:
@@ -599,8 +623,51 @@ def _build_item_requirement_sheet(wb, mr_rows):
         ws.cell(r, 8, flt(po_pending.get(item)))         # Incoming Purchase (Ordered Qty)
         # I "Shortage" = MAX(0, QtyAsPerBOM − QtyInStock − ProjectedIncoming − Ordered + Reserved)
         ws.cell(r, 9, "=MAX(0,(D{r}-E{r}-G{r}-H{r}+F{r}))".format(r=r))
+        # Inventory Rate = STOCK_WAREHOUSE Bin valuation rate (same as sheet 2 col G)
+        ws.cell(r, 10, flt((stock_map.get(item) or frappe._dict()).get("valuation_rate")))
         r += 1
 
+    # TOTAL row: SUMPRODUCT(Qty As Per BOM, Inventory Rate) at the foot of column D =
+    # the total inventory value of the whole BOM requirement.
+    last = r - 1
+    _bold_cells(ws, r, {
+        1: _("TOTAL"),
+        4: "=SUMPRODUCT(D2:D{last},J2:J{last})".format(last=last),
+    })
+    _autosize(ws, headers)
+
+
+# --------------------------------------------------------------------------- #
+# Sheet 4b - Unique Item Requirement  [Item Requirement deduped to one row/item]
+# --------------------------------------------------------------------------- #
+
+def _build_unique_item_requirement_sheet(wb, mr_rows):
+    """One row per unique item across the whole plan chain, with Qty As Per BOM
+    summed over every level/occurrence - the deduped companion to Item Requirement."""
+    ws = wb.create_sheet("Unique Item Requirement")
+    headers = [
+        "Item Code",        # A
+        "Qty As Per BOM",   # B  (summed across every level this item appears on)
+    ]
+    _write_header(ws, headers)
+
+    bom_by_item = {}
+    for row in mr_rows:
+        item = row["item_code"]
+        bom_by_item[item] = bom_by_item.get(item, 0.0) + flt(row.get("required_bom_qty"))
+
+    r = 2
+    for item in sorted(bom_by_item):
+        ws.cell(r, 1, item)
+        ws.cell(r, 2, flt(bom_by_item[item]))
+        r += 1
+
+    if bom_by_item:
+        last = r - 1
+        _bold_cells(ws, r, {
+            1: _("TOTAL"),
+            2: "=SUM(B2:B{last})".format(last=last),
+        })
     _autosize(ws, headers)
 
 

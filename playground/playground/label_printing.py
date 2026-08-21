@@ -37,7 +37,7 @@ Item Master configuration (custom fields, created idempotently in after_migrate)
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, strip_html_tags
 
 PRINTER_ROLE = "Label Printer"
 IN_PROCESS = "In Process"
@@ -96,7 +96,7 @@ def _maybe_create_label_request(doc):
 	cfg = frappe.db.get_value(
 		"Item",
 		item,
-		["custom_enable_finished_label", "custom_label_template", "custom_labels_per_unit"],
+		["custom_enable_finished_label", "custom_label_template", "custom_labels_per_unit", "description"],
 		as_dict=True,
 	) or {}
 
@@ -114,6 +114,7 @@ def _maybe_create_label_request(doc):
 		"production_item": item,
 		"item_code": item,
 		"item_name": doc.item_name or item,
+		"item_description": " ".join(strip_html_tags(cfg.get("description") or "").split()),
 		"company": doc.company,
 		"batch_no": _work_order_batch(doc),
 		"number_of_labels": number_of_labels,

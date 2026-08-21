@@ -14,7 +14,7 @@
  "description": "Print queue + audit trail for finished-kit labels. One row is created automatically when a Work Order enters 'In Process' (see playground.playground.label_printing). A local print agent polls for Status = Pending rows over the REST API, prints TSPL to the TSC printer, and sets Status = Printed / Failed. Never blocks the Work Order.",
  "field_order": [
   "naming_series", "work_order", "production_item", "column_break_hdr", "status", "printed_on",
-  "item_section", "item_code", "item_name", "column_break_item", "company", "batch_no",
+  "item_section", "item_code", "item_name", "item_description", "column_break_item", "company", "batch_no",
   "print_section", "number_of_labels", "label_template", "column_break_print", "error_log"
  ],
  "fields": [
@@ -28,6 +28,7 @@
   {"fieldname": "item_section", "fieldtype": "Section Break", "label": "Item"},
   {"fieldname": "item_code", "fieldtype": "Data", "label": "Item Code", "in_list_view": 1},
   {"fieldname": "item_name", "fieldtype": "Data", "label": "Item Name"},
+  {"fieldname": "item_description", "fieldtype": "Small Text", "label": "Description", "description": "Item description (HTML stripped), printed on the label."},
   {"fieldname": "column_break_item", "fieldtype": "Column Break"},
   {"fieldname": "company", "fieldtype": "Data", "label": "Company", "description": "Printed on the label as the company name."},
   {"fieldname": "batch_no", "fieldtype": "Data", "label": "Batch No", "description": "Optional - included on the label if the Work Order carries a batch."},

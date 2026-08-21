@@ -92,7 +92,7 @@ class ERPNextClient:
 		"""Fetch pending requests, oldest first, with the fields the templates need."""
 		fields = [
 			"name", "work_order", "production_item", "item_code", "item_name",
-			"company", "batch_no", "number_of_labels", "label_template",
+			"item_description", "company", "batch_no", "number_of_labels", "label_template",
 		]
 		params = {
 			"filters": json.dumps([["status", "=", "Pending"]]),
@@ -128,21 +128,27 @@ def tspl_escape(text):
 def render_kit_label(req, cfg):
 	"""Build the KIT_LABEL TSPL for one Label Print Request.
 
-	Layout (60x40 mm @ 203 dpi, ~8 dots/mm):
-	  Company name  -> top line
-	  Product name  -> below, larger
-	  Work Order no -> below
-	  Batch (if any)-> below
-	  QR code       -> right side, encodes the Work Order number
+	Layout (tuned for a 100 x 120 mm label @ 203 dpi, ~8 dots/mm):
+	  Item name    -> headline (font 4, 2x), wrapped to the label width
+	  Description   -> smaller (font 3), wrapped over several lines
+	  WO: <no>      -> work order number
+	  QR code       -> encodes the Work Order number
 
-	Kept intentionally small and declarative so new templates are easy to add:
-	return a bytes payload of TSPL and RAW-print it. To tweak positions/fonts, edit
-	the TEXT/QRCODE coordinates below.
+	BLOCK (not TEXT) is used for the name and description so long values wrap
+	inside the label instead of running off the edge. The block widths are derived
+	from the configured label_width_mm; the vertical (y) offsets assume a ~120 mm
+	tall label - if you change label_height_mm materially, nudge the y values below.
+	To add another template, add a render_<name>() and register it in TEMPLATES.
 	"""
-	company = tspl_escape(req.get("company"))
-	product = tspl_escape(req.get("item_name") or req.get("item_code"))
+	dpmm = 8  # 203 dpi ~ 8 dots/mm
+	width = int(round(float(cfg["label_width_mm"]) * dpmm))
+	margin = 24
+	inner = width - 2 * margin
+
+	item_name = tspl_escape(req.get("item_name") or req.get("item_code"))
+	# Collapse any whitespace/newlines so the description is one clean run BLOCK wraps.
+	description = tspl_escape(" ".join(str(req.get("item_description") or "").split()))
 	work_order = tspl_escape(req.get("work_order"))
-	batch = tspl_escape(req.get("batch_no"))
 	copies = max(1, int(req.get("number_of_labels") or 1))
 
 	lines = [
@@ -152,16 +158,19 @@ def render_kit_label(req, cfg):
 		f"SPEED {cfg['print_speed']}",
 		"DIRECTION 1",
 		"CLS",
-		f'TEXT 16,16,"3",0,1,1,"{company}"',
-		f'TEXT 16,60,"4",0,1,1,"{product}"',
-		f'TEXT 16,120,"3",0,1,1,"WO: {work_order}"',
+		# Item name headline, wrapped inside the label width.
+		f'BLOCK {margin},32,{inner},180,"4",0,2,2,"{item_name}"',
 	]
-	if batch:
-		lines.append(f'TEXT 16,160,"2",0,1,1,"Batch: {batch}"')
-	# QR of the Work Order number, top-right.
-	lines.append(f'QRCODE 360,16,H,5,A,0,"{work_order}"')
-	# PRINT sets,copies -> 1 set, N identical copies.
-	lines.append(f"PRINT 1,{copies}")
+	if description:
+		# Description, smaller, wraps over several lines.
+		lines.append(f'BLOCK {margin},230,{inner},260,"3",0,1,1,"{description}"')
+	lines += [
+		f'TEXT {margin},520,"4",0,2,2,"WO: {work_order}"',
+		# QR of the Work Order number, lower-left.
+		f'QRCODE {margin},600,H,10,A,0,"{work_order}"',
+		# PRINT sets,copies -> 1 set, N identical copies.
+		f"PRINT 1,{copies}",
+	]
 
 	payload = "\r\n".join(lines) + "\r\n"
 	return payload.encode("utf-8", errors="replace")

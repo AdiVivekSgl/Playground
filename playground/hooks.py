@@ -45,6 +45,17 @@ override_doctype_class = {
 	"Purchase Invoice": "playground.playground.overrides.purchase_invoice.CustomPurchaseInvoice",
 }
 
+# Purchase Receipt Connections: surface the Material Transfer Stock Entry created
+# by ERPNext's native "Make Stock Entry" button (Gate Store -> Main Store). The
+# link is already stored on Stock Entry Detail.reference_purchase_receipt; this
+# just declares it on the dashboard (see
+# playground/playground/overrides/purchase_receipt_dashboard.py).
+# NOTE: Frappe allows only ONE app to override a given doctype's dashboard - if
+# another app (e.g. DT-Frontec) later overrides Purchase Receipt, merge instead.
+override_doctype_dashboards = {
+	"Purchase Receipt": "playground.playground.overrides.purchase_receipt_dashboard.get_dashboard_data",
+}
+
 fixtures = [
 	{
 		"doctype": "Custom Field",

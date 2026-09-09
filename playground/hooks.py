@@ -163,6 +163,11 @@ doc_events = {
 		"on_update": "playground.playground.label_printing.on_work_order_update",
 	},
 	"Stock Entry": {
+		# Production User guard: a user restricted to the "Production User" role
+		# profile may only ever have Stock Entries created via a Work Order or a
+		# Purchase Receipt transfer - never a stand-alone one (see
+		# playground.playground.production_user).
+		"validate": "playground.playground.production_user.guard_stock_entry_origin",
 		"on_submit": "playground.playground.label_printing.on_stock_entry_submit",
 	},
 }
@@ -193,4 +198,7 @@ after_migrate = [
 	# Sales Order "Ultimate Owner" field below Customer, defaulting to the customer's
 	# name (idempotent - runs every migrate).
 	"playground.playground.sales_order_custom_fields.setup_sales_order_custom_fields",
+	# Production User: create the restricted "Production User" role, role profile and
+	# permission grid (create-if-missing; maintained via the workbook thereafter).
+	"playground.playground.production_user.setup_production_user",
 ]

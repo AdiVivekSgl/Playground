@@ -1,0 +1,22 @@
+{
+ "doctype": "DocType",
+ "name": "Google Document Field Mapping",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "Maps one ERP (parent) field to a {{placeholder}} in the Google template.",
+ "field_order": [
+  "erp_fieldname", "google_placeholder", "field_type", "formatting", "default_value", "required"
+ ],
+ "fields": [
+  {"fieldname": "erp_fieldname", "fieldtype": "Data", "label": "ERP Fieldname", "reqd": 1, "in_list_view": 1, "columns": 2, "description": "Fieldname on the source document, e.g. supplier_name. A single dotted hop through a Link is allowed, e.g. supplier_address.address_line1."},
+  {"fieldname": "google_placeholder", "fieldtype": "Data", "label": "Google Placeholder", "in_list_view": 1, "columns": 2, "description": "Placeholder text in the template. Defaults to {{erp_fieldname}} if left blank."},
+  {"fieldname": "field_type", "fieldtype": "Select", "label": "Field Type", "options": "\nData\nSmall Text\nText\nText Editor\nDate\nDatetime\nCurrency\nFloat\nInt\nPercent\nCheck\nLink\nSelect", "in_list_view": 1, "columns": 2, "description": "Formatting hint. Blank = auto-detect from the source doctype."},
+  {"fieldname": "formatting", "fieldtype": "Select", "label": "Transform", "options": "\nUppercase\nLowercase\nTitle Case", "columns": 1},
+  {"fieldname": "default_value", "fieldtype": "Data", "label": "Default", "columns": 2, "description": "Used when the field is empty."},
+  {"fieldname": "required", "fieldtype": "Check", "label": "Required", "columns": 1, "description": "If set and the placeholder is missing from the template, generation fails loudly."}
+ ],
+ "permissions": []
+}

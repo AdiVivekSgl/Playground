@@ -27,6 +27,12 @@ doctype_js = {
 	# provisions of the same company (see playground/public/js/provision_link.js).
 	"Purchase Invoice": "public/js/provision_link.js",
 	"Journal Entry": "public/js/provision_link.js",
+	# ERP -> editable Google Docs: adds the Create/Open/Update/Create-New "Google
+	# Doc" actions to any doc that has an enabled Google Document Template. This
+	# one generic file (playground/public/js/google_docs_button.js) is reused for
+	# every supported doctype - enabling another doctype is a Template record plus
+	# one line here, no new Python. See playground/playground/google_docs/.
+	"Purchase Order": "public/js/google_docs_button.js",
 }
 
 # List-view customizations. Purchase Order gets the "Close Purchase Orders" bulk
@@ -120,6 +126,22 @@ fixtures = [
 			]],
 		],
 	},
+	# ERP -> Google Docs metadata fields, so the id/url/status fields created on
+	# supported doctypes travel with the app (also created idempotently in
+	# after_migrate via google_docs.setup.setup_google_docs).
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			["fieldname", "in", [
+				"custom_google_document_section",
+				"custom_google_document_status",
+				"custom_google_document_url",
+				"custom_google_document_id",
+				"custom_google_document_created_on",
+				"custom_google_document_last_updated",
+			]],
+		],
+	},
 ]
 
 # First doc_events / scheduler_events in this app - drives Sales Order Material
@@ -201,4 +223,7 @@ after_migrate = [
 	# Production User: create the restricted "Production User" role, role profile and
 	# permission grid (create-if-missing; maintained via the workbook thereafter).
 	"playground.playground.production_user.setup_production_user",
+	# ERP -> Google Docs: provision the Google Document metadata custom fields on
+	# every DocType that has an enabled Google Document Template (idempotent).
+	"playground.playground.google_docs.setup.setup_google_docs",
 ]

@@ -1,0 +1,35 @@
+{
+ "doctype": "DocType",
+ "name": "Google Docs Settings",
+ "module": "Playground",
+ "custom": 0,
+ "issingle": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1,
+ "description": "Company-wide Google Drive/Docs integration settings for the ERP -> Google Docs engine. The service-account key is stored as an encrypted Password field and is never exposed to the client.",
+ "field_order": [
+  "auth_section", "service_account_json", "impersonate_user", "auth_help",
+  "drive_section", "default_folder_id", "shared_drive_id", "column_break_drive", "default_sharing_mode",
+  "test_section", "test_connection"
+ ],
+ "fields": [
+  {"fieldname": "auth_section", "fieldtype": "Section Break", "label": "Authentication (Service Account)"},
+  {"fieldname": "service_account_json", "fieldtype": "Password", "label": "Service Account JSON Key", "description": "Paste the full JSON key of a Google Workspace service account. Stored encrypted; never sent to the browser."},
+  {"fieldname": "impersonate_user", "fieldtype": "Data", "options": "Email", "label": "Impersonate User (Domain-Wide Delegation)", "description": "Optional Workspace user to act as, e.g. docs@yourcompany.com. Required unless you generate into a Shared Drive, because a service account has no personal Drive quota."},
+  {"fieldname": "auth_help", "fieldtype": "HTML", "options": "<p class='text-muted small'>The service account must have Drive + Docs APIs enabled. For delegation, a Workspace admin authorises the client ID for scopes <code>documents</code> and <code>drive</code>. See the module README for the full setup.</p>"},
+
+  {"fieldname": "drive_section", "fieldtype": "Section Break", "label": "Drive"},
+  {"fieldname": "default_folder_id", "fieldtype": "Data", "label": "Default Drive Folder ID", "description": "Fallback folder for generated docs when a template does not set its own. Take it from the folder URL: drive.google.com/drive/folders/<THIS_ID>."},
+  {"fieldname": "shared_drive_id", "fieldtype": "Data", "label": "Shared Drive ID", "description": "Optional. Set if the folder lives in a Shared Drive."},
+  {"fieldname": "column_break_drive", "fieldtype": "Column Break"},
+  {"fieldname": "default_sharing_mode", "fieldtype": "Select", "label": "Default Sharing Mode", "options": "Inherit Folder\nPrivate\nCompany (Domain)\nSpecific Emails\nAnyone With Link", "default": "Inherit Folder", "description": "Applied when a template does not override it. Never defaults to public."},
+
+  {"fieldname": "test_section", "fieldtype": "Section Break", "label": "Connection"},
+  {"fieldname": "test_connection", "fieldtype": "Button", "label": "Test Connection"}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}
+ ]
+}

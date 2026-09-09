@@ -1,0 +1,24 @@
+{
+ "doctype": "DocType",
+ "name": "Google Document Column Mapping",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "description": "One column of a rendered child table. Tagged with the Table Marker it belongs to (Frappe grids cannot nest, so columns live in a flat grid on the template). Row order = column order.",
+ "field_order": [
+  "table_marker", "child_fieldname", "column_label", "field_type", "formatting", "width", "default_value", "hidden"
+ ],
+ "fields": [
+  {"fieldname": "table_marker", "fieldtype": "Data", "label": "Table Marker", "reqd": 1, "in_list_view": 1, "columns": 2, "description": "Which table this column belongs to, e.g. {{items_table}}. Must match a Table Mapping row."},
+  {"fieldname": "child_fieldname", "fieldtype": "Data", "label": "Child Fieldname", "reqd": 1, "in_list_view": 1, "columns": 2, "description": "Fieldname on the child row, e.g. item_code."},
+  {"fieldname": "column_label", "fieldtype": "Data", "label": "Column Label", "in_list_view": 1, "columns": 2, "description": "Header text, e.g. Item Code."},
+  {"fieldname": "field_type", "fieldtype": "Select", "label": "Type", "options": "\nData\nSmall Text\nText\nDate\nDatetime\nCurrency\nFloat\nInt\nPercent\nCheck", "columns": 1},
+  {"fieldname": "formatting", "fieldtype": "Select", "label": "Transform", "options": "\nUppercase\nLowercase\nTitle Case", "columns": 1},
+  {"fieldname": "width", "fieldtype": "Float", "label": "Width (pt)", "columns": 1, "description": "Optional fixed column width in points."},
+  {"fieldname": "default_value", "fieldtype": "Data", "label": "Default"},
+  {"fieldname": "hidden", "fieldtype": "Check", "label": "Hidden", "columns": 1, "description": "Skip this column when rendering."}
+ ],
+ "permissions": []
+}

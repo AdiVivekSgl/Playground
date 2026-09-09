@@ -1,0 +1,49 @@
+{
+ "doctype": "DocType",
+ "name": "Google Document Template",
+ "module": "Playground",
+ "custom": 0,
+ "engine": "InnoDB",
+ "autoname": "field:template_name",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1,
+ "description": "Configuration that maps a Frappe DocType to a Google Docs template: the template/folder ids, field placeholders and child-table markers. Enabling a template provisions the Google Document metadata fields on its reference DocType.",
+ "field_order": [
+  "template_name", "enabled", "column_break_hdr", "reference_doctype",
+  "google_section", "google_template_url", "google_template_id", "column_break_google", "google_drive_folder_id", "file_naming_pattern",
+  "behaviour_section", "creation_behavior", "update_behavior", "column_break_behaviour", "sharing_mode", "share_emails",
+  "fields_section", "field_mappings",
+  "tables_section", "table_mappings", "column_mappings"
+ ],
+ "fields": [
+  {"fieldname": "template_name", "fieldtype": "Data", "label": "Template Name", "reqd": 1, "unique": 1, "in_list_view": 1},
+  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled", "default": "1", "in_list_view": 1},
+  {"fieldname": "column_break_hdr", "fieldtype": "Column Break"},
+  {"fieldname": "reference_doctype", "fieldtype": "Link", "options": "DocType", "label": "Reference DocType", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1, "description": "The ERP DocType this template renders, e.g. Purchase Order."},
+
+  {"fieldname": "google_section", "fieldtype": "Section Break", "label": "Google Template"},
+  {"fieldname": "google_template_url", "fieldtype": "Data", "options": "URL", "label": "Google Template URL", "description": "Paste the template doc's URL; the ID is extracted from it on save."},
+  {"fieldname": "google_template_id", "fieldtype": "Data", "label": "Google Template ID", "reqd": 1, "description": "docs.google.com/document/d/<THIS_ID>/edit"},
+  {"fieldname": "column_break_google", "fieldtype": "Column Break"},
+  {"fieldname": "google_drive_folder_id", "fieldtype": "Data", "label": "Google Drive Folder ID", "description": "Destination folder for generated docs. Falls back to the default in Google Docs Settings."},
+  {"fieldname": "file_naming_pattern", "fieldtype": "Data", "label": "File Naming Pattern", "default": "{{doctype}} - {{name}}", "description": "e.g. {{doctype}} - {{name}} - {{supplier_name}}"},
+
+  {"fieldname": "behaviour_section", "fieldtype": "Section Break", "label": "Behaviour"},
+  {"fieldname": "creation_behavior", "fieldtype": "Select", "label": "Creation", "options": "Manual\nAutomatic on Submit", "default": "Manual", "description": "Manual: user clicks Create. Automatic on Submit: also generate when the source doc is submitted."},
+  {"fieldname": "update_behavior", "fieldtype": "Select", "label": "Update Behaviour", "options": "Create Once\nUpdate Existing Google Doc\nCreate New Version", "default": "Update Existing Google Doc"},
+  {"fieldname": "column_break_behaviour", "fieldtype": "Column Break"},
+  {"fieldname": "sharing_mode", "fieldtype": "Select", "label": "Sharing", "options": "Inherit Folder\nPrivate\nCompany (Domain)\nSpecific Emails\nAnyone With Link", "default": "Inherit Folder", "description": "How the generated doc is shared. Never defaults to public."},
+  {"fieldname": "share_emails", "fieldtype": "Small Text", "label": "Share With (Emails)", "depends_on": "eval:doc.sharing_mode=='Specific Emails'", "description": "Comma/newline separated."},
+
+  {"fieldname": "fields_section", "fieldtype": "Section Break", "label": "Field Mappings"},
+  {"fieldname": "field_mappings", "fieldtype": "Table", "options": "Google Document Field Mapping", "label": "Field Mappings"},
+
+  {"fieldname": "tables_section", "fieldtype": "Section Break", "label": "Table Mappings"},
+  {"fieldname": "table_mappings", "fieldtype": "Table", "options": "Google Document Table Mapping", "label": "Tables"},
+  {"fieldname": "column_mappings", "fieldtype": "Table", "options": "Google Document Column Mapping", "label": "Table Columns"}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1}
+ ]
+}

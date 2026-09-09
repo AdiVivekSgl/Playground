@@ -7,6 +7,13 @@ description = "Custom API scripts for ERPNext"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
+dependencies = [
+    # ERP -> editable Google Docs engine (playground/playground/google_docs).
+    # Install into the bench env with:
+    #   bench pip install google-api-python-client google-auth
+    "google-api-python-client>=2.0.0",
+    "google-auth>=2.0.0",
+]
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]

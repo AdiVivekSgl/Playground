@@ -1,0 +1,36 @@
+{
+ "doctype": "DocType",
+ "name": "Google Document Log",
+ "module": "Playground",
+ "custom": 0,
+ "engine": "InnoDB",
+ "autoname": "hash",
+ "sort_field": "timestamp",
+ "sort_order": "DESC",
+ "title_field": "reference_document",
+ "description": "Lightweight audit trail of every Google Doc create/update/open/fail, for troubleshooting the integration (spec 15).",
+ "field_order": [
+  "reference_doctype", "reference_document", "action", "status", "column_break_hdr", "log_user", "timestamp",
+  "doc_section", "google_document_id", "google_document_url",
+  "error_section", "error_message"
+ ],
+ "fields": [
+  {"fieldname": "reference_doctype", "fieldtype": "Link", "options": "DocType", "label": "Reference DocType", "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "reference_document", "fieldtype": "Dynamic Link", "options": "reference_doctype", "label": "Reference Document", "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "action", "fieldtype": "Select", "options": "Created\nUpdated\nOpened\nFailed", "label": "Action", "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "status", "fieldtype": "Select", "options": "Success\nError", "label": "Status", "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "column_break_hdr", "fieldtype": "Column Break"},
+  {"fieldname": "log_user", "fieldtype": "Link", "options": "User", "label": "User", "in_list_view": 1},
+  {"fieldname": "timestamp", "fieldtype": "Datetime", "label": "Timestamp", "in_list_view": 1},
+
+  {"fieldname": "doc_section", "fieldtype": "Section Break", "label": "Google Document"},
+  {"fieldname": "google_document_id", "fieldtype": "Data", "label": "Google Document ID"},
+  {"fieldname": "google_document_url", "fieldtype": "Data", "options": "URL", "label": "Google Document URL"},
+
+  {"fieldname": "error_section", "fieldtype": "Section Break", "label": "Error", "depends_on": "eval:doc.status=='Error'"},
+  {"fieldname": "error_message", "fieldtype": "Code", "label": "Error Message", "read_only": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1}
+ ]
+}

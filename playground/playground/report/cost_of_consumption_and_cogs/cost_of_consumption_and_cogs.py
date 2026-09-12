@@ -39,8 +39,9 @@ the identity holds. Cost of Purchase is ``SUM(stock_value_difference)`` of
 Purchase Receipt/Invoice inflows (nets purchase returns, same valuation basis).
 
 Any WIP+FG item that was also purchased (dual-sourced, production-wins) has its
-purchases *excluded* from the headline Cost of Purchase and surfaced separately
-as a reconciliation KPI, so every number stays explainable.
+purchases kept *out of RM Cost of Purchase* - so the RM consumption identity
+stays clean - but *included as an inflow in COGS* (goods bought that are then
+sold), and shown as its own KPI so the split stays explainable.
 """
 
 import frappe
@@ -282,8 +283,14 @@ def build_rows(filters, purchased, produced, opening, closing, purchases):
 	totals["cost_of_consumption"] = (
 		totals["opening_rm"] + totals["purchase_rm"] - totals["closing_rm"]
 	)
+	# WIP+FG purchases are a real COGS inflow (goods bought that are then sold),
+	# so they belong in COGS even though they are kept out of RM Cost of Purchase
+	# to preserve the RM consumption identity.
 	totals["cogs"] = (
-		totals["cost_of_consumption"] + totals["opening_wipfg"] - totals["closing_wipfg"]
+		totals["cost_of_consumption"]
+		+ totals["purchase_wipfg"]
+		+ totals["opening_wipfg"]
+		- totals["closing_wipfg"]
 	)
 
 	# Group by bucket (RM first), highest absolute movement first within a bucket.
@@ -328,7 +335,7 @@ def get_report_summary(totals):
 		{"label": _("Opening WIP+FG"), "value": totals["opening_wipfg"], "datatype": "Currency", "indicator": "Orange"},
 		{"label": _("Closing WIP+FG"), "value": totals["closing_wipfg"], "datatype": "Currency", "indicator": "Orange"},
 		{"label": _("Cost of Goods Sold"), "value": totals["cogs"], "datatype": "Currency", "indicator": "Red"},
-		{"label": _("WIP+FG Purchases (excluded)"), "value": totals["purchase_wipfg"], "datatype": "Currency", "indicator": "Grey"},
+		{"label": _("WIP+FG Purchases (in COGS)"), "value": totals["purchase_wipfg"], "datatype": "Currency", "indicator": "Orange"},
 		{"label": _("Flagged Items"), "value": totals["flagged_count"], "datatype": "Int", "indicator": "Grey"},
 	]
 

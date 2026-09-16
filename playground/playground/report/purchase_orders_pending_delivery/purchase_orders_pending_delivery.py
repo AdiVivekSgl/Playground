@@ -12,8 +12,9 @@ Two things in one report:
    line's **Scheduled Date** and the PO grand total shown once per PO (on the
    first line, as in the original Query Report this replaces).
 
-2. **Pending-delivery summaries (draft + submitted)** - the value still awaiting
-   delivery, ``(qty - received_qty) x base_rate`` in company currency, pivoted by
+2. **Pending-delivery summaries (draft + submitted, excluding Closed)** - the
+   value still awaiting delivery, ``(qty - received_qty) x base_rate`` in company
+   currency, pivoted by
    delivery urgency into two tables rendered below the filters:
      * by **Item Group**
      * by **Supplier**
@@ -23,8 +24,10 @@ Two things in one report:
      * ``> mid_days`` (default 30)
 
 The listing is draft-only by design; the summaries deliberately span draft and
-submitted so the pending-delivery exposure is complete. KPI cards give the
-per-bucket grand totals and a stacked bar shows the Item Group split.
+submitted so the pending-delivery exposure is complete, but exclude Closed POs
+(their outstanding qty is intentionally written off and is not really pending).
+KPI cards give the per-bucket grand totals and a stacked bar shows the Item
+Group split.
 """
 
 import frappe
@@ -155,6 +158,7 @@ def get_pending_lines(filters):
 		LEFT JOIN `tabItem` it ON it.name = poi.item_code
 		{join}
 		WHERE po.docstatus IN (0, 1)
+			AND po.status != 'Closed'
 			AND (poi.qty - poi.received_qty) > 0
 			{conditions}
 		""".format(join=join, conditions=conditions),

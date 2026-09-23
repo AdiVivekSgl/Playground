@@ -192,6 +192,14 @@ doc_events = {
 		"validate": "playground.playground.production_user.guard_stock_entry_origin",
 		"on_submit": "playground.playground.label_printing.on_stock_entry_submit",
 	},
+	# RFQ Intake: emails forwarded to the intake mailbox (RFQ Intake Settings) are
+	# queued for a background job that saves an email PDF + attachments, extracts
+	# Title/Customer/Territory/Target Date/Value with Claude, and creates/updates an
+	# Opportunity + linked CRM Opportunity. Self-gates on settings (enabled + account),
+	# so every other received email is a no-op. See playground/playground/rfq_intake/.
+	"Communication": {
+		"after_insert": "playground.playground.rfq_intake.handler.on_email",
+	},
 }
 
 scheduler_events = {
@@ -226,4 +234,6 @@ after_migrate = [
 	# ERP -> Google Docs: provision the Google Document metadata custom fields on
 	# every DocType that has an enabled Google Document Template (idempotent).
 	"playground.playground.google_docs.setup.setup_google_docs",
+	# RFQ Intake: create the "Email Intake" custom fields on Opportunity (idempotent).
+	"playground.playground.rfq_intake.setup.setup_rfq_intake",
 ]

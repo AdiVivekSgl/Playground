@@ -13,6 +13,9 @@ dependencies = [
     #   bench pip install google-api-python-client google-auth
     "google-api-python-client>=2.0.0",
     "google-auth>=2.0.0",
+    # RFQ Intake AI extraction (playground/playground/rfq_intake).
+    #   bench pip install anthropic
+    "anthropic",
 ]
 
 [build-system]

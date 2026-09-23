@@ -33,6 +33,10 @@ def setup_sales_order_custom_fields():
 		_create_ultimate_owner_field()
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "setup_sales_order_custom_fields failed")
+	try:
+		_create_pending_fields()
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "setup_sales_order_pending_fields failed")
 
 
 def _create_ultimate_owner_field():
@@ -56,3 +60,47 @@ def _create_ultimate_owner_field():
 		},
 	]
 	create_custom_fields({"Sales Order": fields}, ignore_validate=True)
+
+
+def _create_pending_fields():
+	"""Pending Qty / Pending Amount columns on the Sales Order items table.
+
+	Both are VIRTUAL (no DB column): delivered_qty is bumped by Delivery Note
+	submit/cancel via a direct db update that never re-runs the Sales Order's
+	validate, so a stored "pending" column would silently go stale. Instead the
+	values are computed on the fly in the form (playground/public/js/sales_order.js)
+	from qty - delivered_qty, so they are always current when the order is opened.
+
+	Pending Amount is a Float rather than Currency on purpose: a virtual Currency
+	field's `options` (the currency fieldname) can be misread as a virtual-field
+	expression; the form shows the order's currency on the header totals instead.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	fields = [
+		{
+			"fieldname": "custom_pending_qty",
+			"label": "Pending Qty",
+			"fieldtype": "Float",
+			"insert_after": "delivered_qty",
+			"is_virtual": 1,
+			"read_only": 1,
+			"no_copy": 1,
+			"in_list_view": 1,
+			"columns": 1,
+			"description": "Ordered qty not yet delivered (qty - delivered qty).",
+		},
+		{
+			"fieldname": "custom_pending_amount",
+			"label": "Pending Amount",
+			"fieldtype": "Float",
+			"insert_after": "custom_pending_qty",
+			"is_virtual": 1,
+			"read_only": 1,
+			"no_copy": 1,
+			"in_list_view": 1,
+			"columns": 1,
+			"description": "Pending qty x rate, in the Sales Order currency.",
+		},
+	]
+	create_custom_fields({"Sales Order Item": fields}, ignore_validate=True)

@@ -79,12 +79,64 @@ function set_grid_fields_read_only(frm, table_field, fieldnames, locked) {
 	grid.refresh();
 }
 
+// Sales Order — Pending Qty / Amount
+// ==================================
+// Fills the virtual "Pending Qty" / "Pending Amount" item columns (created in
+// playground/playground/sales_order_custom_fields.py) from qty - delivered_qty,
+// and shows the order-level pending totals as dashboard indicators. Values are
+// assigned straight onto the rows (not frappe.model.set_value) so a submitted
+// order is never marked dirty.
+
+frappe.provide("playground.pending");
+
+playground.pending.compute_row = function (row) {
+	const pending_qty = Math.max(flt(row.qty) - flt(row.delivered_qty), 0);
+	row.custom_pending_qty = flt(pending_qty, precision("qty", row));
+	row.custom_pending_amount = flt(pending_qty * flt(row.rate), precision("amount", row));
+};
+
+playground.pending.apply = function (frm) {
+	let total_qty = 0;
+	let total_amount = 0;
+	(frm.doc.items || []).forEach((row) => {
+		playground.pending.compute_row(row);
+		total_qty += row.custom_pending_qty;
+		total_amount += row.custom_pending_amount;
+	});
+	frm.refresh_field("items");
+
+	if (frm.doc.docstatus === 1) {
+		const color = total_qty > 0 ? "orange" : "green";
+		frm.dashboard.add_indicator(
+			__("Pending Qty: {0}", [format_number(total_qty, null, precision("qty"))]),
+			color
+		);
+		frm.dashboard.add_indicator(
+			__("Pending Amount: {0}", [format_currency(total_amount, frm.doc.currency)]),
+			color
+		);
+	}
+};
+
 frappe.ui.form.on("Sales Order", {
 	refresh(frm) {
 		playground.blanket_order.apply_lock(frm);
+		playground.pending.apply(frm);
 	},
 	// Grid docfields are only fully wired after the child rows render, so re-apply.
 	onload_post_render(frm) {
 		playground.blanket_order.apply_lock(frm);
+	},
+});
+
+// Keep a draft's pending columns in step as lines are edited.
+frappe.ui.form.on("Sales Order Item", {
+	qty(frm, cdt, cdn) {
+		playground.pending.compute_row(locals[cdt][cdn]);
+		frm.refresh_field("items");
+	},
+	rate(frm, cdt, cdn) {
+		playground.pending.compute_row(locals[cdt][cdn]);
+		frm.refresh_field("items");
 	},
 });

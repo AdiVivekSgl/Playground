@@ -1,0 +1,68 @@
+{
+ "doctype": "DocType",
+ "name": "ERP Backup",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 0,
+ "naming_rule": "Expression (old style)",
+ "autoname": "ERPBKP-.YYYY.-.#####",
+ "title_field": "backup_type",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "description": "One record per backup run. Created as 'Queued' by the scheduler or the 'Create Backup Now' button, then advanced by the background pipeline through Running -> Completed -> Verified (or Failed). A record is only trustworthy for recovery once Status = Verified.",
+ "field_order": [
+  "overview_section", "backup_type", "status", "current_stage", "column_break_ov", "keep_forever", "description",
+  "timing_section", "started_at", "column_break_time", "completed_at",
+  "sizes_section", "database_size", "files_size", "column_break_sizes", "archive_size",
+  "storage_section", "database_backup_path", "archive_path", "column_break_store", "checksum",
+  "versions_section", "frappe_version", "column_break_ver", "erpnext_version",
+  "verification_section", "verification_status", "verification_details",
+  "error_section", "error_log"
+ ],
+ "fields": [
+  {"fieldname": "overview_section", "fieldtype": "Section Break", "label": "Overview"},
+  {"fieldname": "backup_type", "fieldtype": "Select", "label": "Backup Type", "options": "Monthly\nManual\nYear-End", "default": "Manual", "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Queued\nRunning\nCompleted\nFailed\nVerified", "default": "Queued", "read_only": 1, "in_list_view": 1, "in_standard_filter": 1, "no_copy": 1, "description": "Verified is the ONLY status that means the archive was integrity-checked. Completed = archive written but not yet verified."},
+  {"fieldname": "current_stage", "fieldtype": "Data", "label": "Current Stage", "read_only": 1, "no_copy": 1, "description": "Live progress while Running (e.g. Database Backup, Data Export, Archive, Verification)."},
+  {"fieldname": "column_break_ov", "fieldtype": "Column Break"},
+  {"fieldname": "keep_forever", "fieldtype": "Check", "label": "Keep Forever", "default": "0", "description": "Exempt this backup from retention pruning permanently."},
+  {"fieldname": "description", "fieldtype": "Small Text", "label": "Description"},
+
+  {"fieldname": "timing_section", "fieldtype": "Section Break", "label": "Timing"},
+  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "read_only": 1, "no_copy": 1, "in_list_view": 1},
+  {"fieldname": "column_break_time", "fieldtype": "Column Break"},
+  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At", "read_only": 1, "no_copy": 1},
+
+  {"fieldname": "sizes_section", "fieldtype": "Section Break", "label": "Sizes"},
+  {"fieldname": "database_size", "fieldtype": "Float", "label": "Database Size (bytes)", "read_only": 1, "no_copy": 1, "precision": "0"},
+  {"fieldname": "files_size", "fieldtype": "Float", "label": "Files Size (bytes)", "read_only": 1, "no_copy": 1, "precision": "0"},
+  {"fieldname": "column_break_sizes", "fieldtype": "Column Break"},
+  {"fieldname": "archive_size", "fieldtype": "Float", "label": "Archive Size (bytes)", "read_only": 1, "no_copy": 1, "precision": "0", "in_list_view": 1},
+
+  {"fieldname": "storage_section", "fieldtype": "Section Break", "label": "Storage"},
+  {"fieldname": "database_backup_path", "fieldtype": "Data", "label": "Database Backup Path", "read_only": 1, "no_copy": 1, "description": "Path of the DB dump inside the archive (DATABASE/database.sql.gz)."},
+  {"fieldname": "archive_path", "fieldtype": "Data", "label": "Archive Key", "read_only": 1, "no_copy": 1, "description": "Storage key (file name) of the archive within the backend. Never a public URL - download only via the secure endpoint."},
+  {"fieldname": "column_break_store", "fieldtype": "Column Break"},
+  {"fieldname": "checksum", "fieldtype": "Data", "label": "Checksum (SHA-256)", "read_only": 1, "no_copy": 1},
+
+  {"fieldname": "versions_section", "fieldtype": "Section Break", "label": "Environment"},
+  {"fieldname": "frappe_version", "fieldtype": "Data", "label": "Frappe Version", "read_only": 1, "no_copy": 1},
+  {"fieldname": "column_break_ver", "fieldtype": "Column Break"},
+  {"fieldname": "erpnext_version", "fieldtype": "Data", "label": "ERPNext Version", "read_only": 1, "no_copy": 1},
+
+  {"fieldname": "verification_section", "fieldtype": "Section Break", "label": "Verification"},
+  {"fieldname": "verification_status", "fieldtype": "Select", "label": "Verification Status", "options": "Pending\nPassed\nFailed", "default": "Pending", "read_only": 1, "no_copy": 1, "in_list_view": 1},
+  {"fieldname": "verification_details", "fieldtype": "Code", "label": "Verification Details", "read_only": 1, "no_copy": 1},
+
+  {"fieldname": "error_section", "fieldtype": "Section Break", "label": "Error Log"},
+  {"fieldname": "error_log", "fieldtype": "Code", "label": "Error Log", "read_only": 1, "no_copy": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1, "print": 1, "email": 1},
+  {"role": "Backup Manager", "read": 1, "create": 1, "report": 1, "export": 1, "print": 1}
+ ]
+}

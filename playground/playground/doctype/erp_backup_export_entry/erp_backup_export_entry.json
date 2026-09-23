@@ -1,0 +1,18 @@
+{
+ "doctype": "DocType",
+ "name": "ERP Backup Export Entry",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "description": "One row = one DocType included in the ERP Backup human-readable CSV export. Configurable so the export list is not hard-coded (spec 1C).",
+ "field_order": ["document_type", "enabled"],
+ "fields": [
+  {"fieldname": "document_type", "fieldtype": "Link", "options": "DocType", "label": "DocType", "reqd": 1, "in_list_view": 1, "columns": 8},
+  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled", "default": "1", "in_list_view": 1, "columns": 2}
+ ],
+ "permissions": []
+}

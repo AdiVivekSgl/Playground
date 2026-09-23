@@ -1,0 +1,47 @@
+{
+ "doctype": "DocType",
+ "name": "ERP Backup Settings",
+ "module": "Playground",
+ "custom": 0,
+ "issingle": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1,
+ "description": "Configuration for the ERP Monthly Backup module: schedule, retention, storage backend, notification recipients, and the list of business DocTypes included in the human-readable CSV export. Ships DISABLED - a System Manager must tick 'Enable Scheduled Backups' to start the monthly schedule.",
+ "field_order": [
+  "schedule_section", "enabled", "schedule_frequency", "column_break_sched", "day_of_month", "hour",
+  "retention_section", "retention_monthly_count", "keep_year_end_forever", "column_break_ret", "year_end_month",
+  "storage_section", "storage_backend", "local_storage_path",
+  "notify_section", "notification_recipients",
+  "export_section", "export_help", "export_doctypes"
+ ],
+ "fields": [
+  {"fieldname": "schedule_section", "fieldtype": "Section Break", "label": "Schedule"},
+  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enable Scheduled Backups", "default": "0", "description": "Off by default. When on, a backup runs automatically on the configured day/hour each month."},
+  {"fieldname": "schedule_frequency", "fieldtype": "Select", "label": "Frequency", "options": "Monthly", "default": "Monthly", "description": "V1 supports Monthly. The hourly scheduler only fires on the matching day + hour below."},
+  {"fieldname": "column_break_sched", "fieldtype": "Column Break"},
+  {"fieldname": "day_of_month", "fieldtype": "Int", "label": "Day of Month", "default": "1", "description": "1-28 recommended (a day every month has)."},
+  {"fieldname": "hour", "fieldtype": "Int", "label": "Hour (0-23)", "default": "2", "description": "Local server hour to run at. Default 02:00, off-peak."},
+
+  {"fieldname": "retention_section", "fieldtype": "Section Break", "label": "Retention"},
+  {"fieldname": "retention_monthly_count", "fieldtype": "Int", "label": "Keep N Monthly Backups", "default": "12", "description": "Newest N monthly backups are kept; older ones are pruned (archive deleted + record removed)."},
+  {"fieldname": "keep_year_end_forever", "fieldtype": "Check", "label": "Keep Year-End Backups Forever", "default": "1"},
+  {"fieldname": "column_break_ret", "fieldtype": "Column Break"},
+  {"fieldname": "year_end_month", "fieldtype": "Int", "label": "Year-End Month", "default": "12", "description": "A scheduled backup in this month is tagged 'Year-End' and (if the box above is ticked) never pruned. A backup marked 'Keep Forever' is also always preserved."},
+
+  {"fieldname": "storage_section", "fieldtype": "Section Break", "label": "Storage"},
+  {"fieldname": "storage_backend", "fieldtype": "Select", "label": "Storage Backend", "options": "Local", "default": "Local", "description": "V1 stores locally. The code has a storage abstraction so S3 / GCS / Azure can be added later without touching the backup logic."},
+  {"fieldname": "local_storage_path", "fieldtype": "Data", "label": "Local Storage Path", "description": "Absolute directory for archives. Leave blank to use the site's PRIVATE backups area (recommended - never web-served): <site>/private/backups/erp_monthly."},
+
+  {"fieldname": "notify_section", "fieldtype": "Section Break", "label": "Notifications"},
+  {"fieldname": "notification_recipients", "fieldtype": "Small Text", "label": "Notification Recipients", "description": "Email addresses (comma or newline separated) to notify on success/failure. Blank = all enabled System Managers."},
+
+  {"fieldname": "export_section", "fieldtype": "Section Break", "label": "Human-Readable Export"},
+  {"fieldname": "export_help", "fieldtype": "HTML", "options": "<p class='text-muted small'>DocTypes exported to CSV for data portability (recovery Layer 2). Child tables are listed separately - each retains its parent reference via the parent/parenttype/parentfield columns. This list never affects the authoritative database dump.</p>"},
+  {"fieldname": "export_doctypes", "fieldtype": "Table", "label": "Exported DocTypes", "options": "ERP Backup Export Entry"}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}
+ ]
+}

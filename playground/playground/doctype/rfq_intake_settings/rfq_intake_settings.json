@@ -1,0 +1,132 @@
+{
+ "actions": [],
+ "creation": "2026-09-23 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "email_account",
+  "company",
+  "internal_domains",
+  "column_break_1",
+  "default_territory",
+  "default_currency",
+  "ai_section",
+  "anthropic_api_key",
+  "model",
+  "column_break_2",
+  "review_confidence_threshold",
+  "match_window_days",
+  "send_summary_reply"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "description": "Only emails received on this account are processed.",
+   "fieldname": "email_account",
+   "fieldtype": "Link",
+   "label": "Intake Email Account",
+   "options": "Email Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "internal_domains",
+   "fieldtype": "Data",
+   "label": "Internal Domains",
+   "default": "frontec.co.in",
+   "description": "Comma-separated staff email domains. Never treated as the customer."
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Used when neither the customer record nor the email gives a territory.",
+   "fieldname": "default_territory",
+   "fieldtype": "Link",
+   "label": "Default Territory",
+   "options": "Territory",
+   "reqd": 1
+  },
+  {
+   "fieldname": "default_currency",
+   "fieldtype": "Link",
+   "label": "Default Currency",
+   "options": "Currency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "ai_section",
+   "fieldtype": "Section Break",
+   "label": "AI Extraction"
+  },
+  {
+   "fieldname": "anthropic_api_key",
+   "fieldtype": "Password",
+   "label": "Anthropic API Key",
+   "reqd": 1
+  },
+  {
+   "default": "claude-opus-5",
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "label": "Claude Model",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0.7",
+   "description": "Opportunities below this confidence are flagged Needs Review.",
+   "fieldname": "review_confidence_threshold",
+   "fieldtype": "Float",
+   "label": "Review Confidence Threshold"
+  },
+  {
+   "default": "90",
+   "description": "How far back to look for an open Opportunity when one of our own quotes is forwarded.",
+   "fieldname": "match_window_days",
+   "fieldtype": "Int",
+   "label": "Quote Match Window (days)"
+  },
+  {
+   "default": "1",
+   "description": "Reply to whoever forwarded the email with the extracted summary and a link.",
+   "fieldname": "send_summary_reply",
+   "fieldtype": "Check",
+   "label": "Send Summary Reply"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-23 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Playground",
+ "name": "RFQ Intake Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

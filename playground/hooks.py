@@ -21,12 +21,16 @@ doctype_js = {
 	"Role Profile": "public/js/role_profile_permissions.js",
 	# Blanket Order lock: on a Sales Order that draws down a Blanket Order, grey out
 	# rate/discounting + payment-terms fields so only qty is editable (UX mirror of
-	# the validate hook in playground/playground/blanket_order_lock.py).
+	# the validate hook in playground/playground/blanket_order_lock.py). Also fills
+	# the virtual Pending Qty / Pending Amount item columns + header totals.
 	"Sales Order": "public/js/sales_order.js",
 	# Provision Management: filter the "Provision Against" link to open (un-reversed)
 	# provisions of the same company (see playground/public/js/provision_link.js).
 	"Purchase Invoice": "public/js/provision_link.js",
 	"Journal Entry": "public/js/provision_link.js",
+	# ERP Backup: "Create Backup Now" + "Download" actions on the ERP Backup form
+	# (see playground/public/js/erp_backup.js and playground/playground/erp_backup/).
+	"ERP Backup": "public/js/erp_backup.js",
 	# ERP -> editable Google Docs: adds the Create/Open/Update/Create-New "Google
 	# Doc" actions to any doc that has an enabled Google Document Template. This
 	# one generic file (playground/public/js/google_docs_button.js) is reused for
@@ -205,6 +209,10 @@ doc_events = {
 scheduler_events = {
 	"hourly": [
 		"playground.playground.sales_order_hooks.recompute_all_open_so_material_status",
+		# ERP Backup: check every hour whether the configured monthly backup is due.
+		# The task self-gates on ERP Backup Settings (enabled + day-of-month + hour)
+		# and no-ops otherwise, so it stays dormant until an admin enables backups.
+		"playground.playground.erp_backup.tasks.scheduled_backup_check",
 	],
 	# Refresh BOM valuations on the 1st of every month: fire an "Update Cost"
 	# across all BOMs (same as the BOM Update Tool button). "0 2 1 * *" =
@@ -226,7 +234,7 @@ after_migrate = [
 	# and the Label Printer role (idempotent - runs every migrate).
 	"playground.playground.label_printing.setup_label_printing",
 	# Sales Order "Ultimate Owner" field below Customer, defaulting to the customer's
-	# name (idempotent - runs every migrate).
+	# name, plus virtual Pending Qty / Pending Amount on Sales Order Item (idempotent).
 	"playground.playground.sales_order_custom_fields.setup_sales_order_custom_fields",
 	# Production User: create the restricted "Production User" role, role profile and
 	# permission grid (create-if-missing; maintained via the workbook thereafter).
@@ -234,6 +242,9 @@ after_migrate = [
 	# ERP -> Google Docs: provision the Google Document metadata custom fields on
 	# every DocType that has an enabled Google Document Template (idempotent).
 	"playground.playground.google_docs.setup.setup_google_docs",
+	# ERP Backup: create the "Backup Manager" role and seed the default export
+	# DocType list into ERP Backup Settings the first time (idempotent).
+	"playground.playground.erp_backup.setup.setup_erp_backup",
 	# RFQ Intake: create the "Email Intake" custom fields on Opportunity (idempotent).
 	"playground.playground.rfq_intake.setup.setup_rfq_intake",
 ]

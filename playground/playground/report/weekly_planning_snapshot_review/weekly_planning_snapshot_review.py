@@ -343,9 +343,10 @@ def approve_snapshot(filters=None, include_manual=0):
 		pending = flt(r.pending_qty)
 		reserved = flt(res.get("reserved_qty"))
 		free = flt(stock.get("actual_qty")) - flt(so_reserved_map.get(r.item_code, 0.0))
-		# Suggested Prodn - FGSRM logic (no buffer). Committed Prodn starts equal
-		# to it; production edits it on the draft before submission.
-		suggested = max(0.0, max(0.0, pending - reserved) - free)
+		# Suggested Prodn / Committed Prodn are left to the doctype's validate(),
+		# which allocates each item's free stock date-wise across its lines (FGSRM
+		# logic) and defaults Committed to Suggested; production edits Committed on
+		# the draft before submission.
 		snap.append(
 			"items",
 			{
@@ -358,8 +359,6 @@ def approve_snapshot(filters=None, include_manual=0):
 				"pending_qty": pending,
 				"reserved_qty": reserved,
 				"item_free_stock": free,
-				"suggested_prodn": suggested,
-				"committed_prodn": suggested,
 				"valuation_rate": flt(stock.get("valuation_rate")),
 			},
 		)
@@ -375,19 +374,17 @@ def _append_projected_rows(snap, manual_reqs, item_map, stock_map, so_reserved_m
 	lines. Each becomes an ordinary snapshot line, but:
 	  - customer reads "<Customer> - Projected" (or just "Projected" when the
 	    requirement carries no customer), so speculative demand is unmistakable;
-	  - reserved_qty is 0 (nothing is reserved against a projection) and it nets
-	    against the item's frozen free stock exactly like a Sales Order line, so
-	    Suggested Prodn is comparable;
+	  - reserved_qty is 0 (nothing is reserved against a projection) and, having
+	    no so_date, it nets only against the item free stock left after every
+	    Sales Order line (committed orders keep first claim);
 	  - sales_order is blank and sales_order_item is a synthetic MANUAL-<name>
 	    key (see MANUAL_SO_ITEM_PREFIX).
-	The doctype's validate() recomputes Suggested from these same inputs, so the
-	values set here and the stored ones agree."""
+	Suggested / Committed Prodn are computed by the doctype's validate()."""
 	for req in manual_reqs:
 		item = req["item_code"]
 		stock = stock_map.get(item) or frappe._dict()
 		qty = flt(req["qty"])
 		free = flt(stock.get("actual_qty")) - flt(so_reserved_map.get(item, 0.0))
-		suggested = max(0.0, qty - free)
 		customer = req.get("customer")
 		projected = _("{0} - Projected").format(customer) if customer else _("Projected")
 		snap.append(
@@ -402,8 +399,6 @@ def _append_projected_rows(snap, manual_reqs, item_map, stock_map, so_reserved_m
 				"pending_qty": qty,
 				"reserved_qty": 0.0,
 				"item_free_stock": free,
-				"suggested_prodn": suggested,
-				"committed_prodn": suggested,
 				"valuation_rate": flt(stock.get("valuation_rate")),
 			},
 		)

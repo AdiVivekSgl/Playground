@@ -1,7 +1,9 @@
+from datetime import date
+
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, fmt_money, formatdate, now_datetime
+from frappe.utils import flt, fmt_money, formatdate, getdate, now_datetime
 
 
 class WeeklyPlanningSnapshot(Document):
@@ -33,15 +35,28 @@ class WeeklyPlanningSnapshot(Document):
 
 	# ------------------------------------------------------------------ #
 	def _recompute_lines(self):
-		"""Suggested Prodn = max(0, (pending - reserved) - item_free_stock) (FGSRM
-		logic). Committed Prodn is prepopulated from Suggested only when it's empty
-		- user edits are never clobbered."""
+		"""Suggested Prodn = the line's shortfall (pending - reserved) not covered
+		by the item free stock LEFT for it (FGSRM logic). Free stock is allocated
+		date-wise: an item's lines claim it in so_date order (then SO, then row
+		order), Projected lines (no date) last, so the same units are never netted
+		against two lines. Committed Prodn is prepopulated from Suggested only when
+		it's empty - user edits are never clobbered."""
+		free_left = {}
+		lines = [d for d in self.items if not d.is_buffer]
+		lines.sort(key=lambda d: (getdate(d.so_date) if d.so_date else date.max, d.sales_order or "", d.idx or 0))
+		for d in lines:
+			if d.item_code not in free_left:
+				free_left[d.item_code] = max(0.0, flt(d.item_free_stock))
+			short = max(0.0, flt(d.pending_qty) - flt(d.reserved_qty))
+			covered = min(short, free_left[d.item_code])
+			free_left[d.item_code] -= covered
+			d.suggested_prodn = short - covered
+
 		for d in self.items:
 			if d.is_buffer:
 				# Synthetic surplus row - no SO requirement; keep its Committed as set.
 				d.suggested_prodn = 0.0
 				continue
-			d.suggested_prodn = max(0.0, max(0.0, flt(d.pending_qty) - flt(d.reserved_qty)) - flt(d.item_free_stock))
 			# Default Committed to Suggested only when unset - preserve edits
 			# (including a deliberate 0).
 			if d.committed_prodn is None or d.committed_prodn == "":

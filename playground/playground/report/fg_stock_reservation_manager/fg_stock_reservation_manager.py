@@ -216,11 +216,13 @@ def execute(filters=None):
 
 		breakdown = item_reservations.get(r.item_code) or {"total": 0.0, "by_customer": {}}
 
-		# Suggested Prodn = shortfall not coverable by this item's free stock =
-		# max(0, Short to Complete − Item Free Stock) — mirrors the PRR's
-		# "Required to Produce" netting, computed from the two adjacent columns.
-		this_item_free = flt(item_free_stock_map.get(r.item_code, 0.0))
-		suggested_prodn = max(0.0, short_to_complete - this_item_free)
+		# Suggested Prodn = the part of this line's shortfall that the free stock
+		# LEFT for it can't cover. Free stock is allocated date-wise (same FIFO
+		# walk as Reservable Now), so earlier lines claim it first and a later line
+		# only sees the remainder - the same units are never netted against two
+		# lines. Summed over an item's lines this equals max(0, Σ Short − Free),
+		# i.e. _suggested_prodn_by_item's figure.
+		suggested_prodn = max(0.0, short_to_complete - reservable)
 
 		# Pending Value = pending qty x line rate EXCLUDING tax (base_net_rate,
 		# company currency) - the same ex-tax basis the dashboard uses; falls back
@@ -801,10 +803,10 @@ def _suggested_prodn_by_item(filters):
 	"""Itemwise Suggested Prodn for the current filters = max(0, Σ Short to
 	Complete − Item Free Stock), computed once per item.
 
-	NB: this aggregates at the ITEM level rather than naively summing the
-	per-line "Suggested Prodn" column - free stock is shared across an item's SO
-	lines, so summing the per-line figure (which subtracts the full free stock on
-	every line) would misstate the true net requirement. Same demand/free-stock
+	NB: this aggregates at the ITEM level; it reconciles with the sum of the
+	per-line "Suggested Prodn" column because that column allocates free stock
+	date-wise across an item's lines (each unit netted against one line only).
+	Same demand/free-stock
 	inputs and Unreserved Stock Basis as the report, so the totals reconcile with
 	what's on screen. Only the item/customer/date filters apply here (the
 	only_unreserved / view_mode display toggles don't change true open demand).

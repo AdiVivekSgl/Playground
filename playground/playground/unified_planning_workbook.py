@@ -896,12 +896,14 @@ def _action_items(plan, chain, lines, committed_by_item):
 def _unplanned_subassemblies(chain):
     """{item_code} of Manufacture items in a plan's Raw Materials that never made
     it into the next plan down the chain (frontec skipped them, or the chain build
-    stopped) - i.e. branches whose materials are missing from the workbook."""
+    stopped) - i.e. branches whose materials are missing from the workbook.
+    Zero-qty rows (fully covered by stock) are never carried down, so they don't
+    count."""
     out = set()
     for idx, pp in enumerate(chain):
         mfg = set(frappe.get_all(
             "Material Request Plan Item",
-            filters={"parent": pp, "material_request_type": "Manufacture"},
+            filters={"parent": pp, "material_request_type": "Manufacture", "quantity": [">", 0]},
             pluck="item_code",
         ))
         if not mfg:

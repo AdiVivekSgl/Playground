@@ -55,6 +55,14 @@ are in-cell formulas so the workbook stays live when edited):
                                        A = Item; the PAS reader takes the purchase qty
                                        as Short Qty + Buffer and picks up Vendor by
                                        header (`purchase_authorization_sheet._read_approved_sheet`).
+  6. "Action Items"                 - plan readiness (plan_readiness.py): every
+                                       missing BOM / disabled item / missing rate
+                                       or supplier, its BOM path, the FGs it
+                                       affects, its impact on this plan, and
+                                       clickable Fix / Open Item links. A red Cover
+                                       banner links here when the plan is partial.
+                                       `plan` may be omitted ("Download workbook
+                                       only") - the plan-chain sheets are then empty.
 
 Data sources by entry point:
   - From FGSRM: `filters` (the report's filter JSON) drives sheets 1-3; the plan
@@ -89,9 +97,11 @@ from playground.playground.report.fg_stock_reservation_manager.fg_stock_reservat
 from playground.playground.report.production_requirement_report.production_requirement_report import (
     get_stock_map,
 )
+from playground.playground.plan_readiness import BLOCKER, check_readiness, form_route, new_route
 
 APPROVED_SHEET = "Approved for Purchase"  # must match purchase_authorization_sheet.APPROVED_SHEET
 ITEM_REQUIREMENT_SHEET = "Item Requirement"  # the default item-requirement view
+ACTION_ITEMS_SHEET = "Action Items"
 
 # frontec's parent-plan link that chains the nested Production Plans (used to walk
 # the plan chain for sheets 3-4).
@@ -101,19 +111,25 @@ _HEADER_FILL = "D3D3D3"
 
 
 @frappe.whitelist()
-def download_unified_planning_workbook(plan, filters=None, snapshot=None):
+def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
     """Stream the unified workbook for Production Plan `plan`: a Cover sheet
-    followed by the four planning sheets.
+    followed by the planning sheets and an Action Items sheet.
 
     Exactly one of `filters` (FGSRM entry point) or `snapshot` (WPS entry point)
     is expected for sheets 1-2; sheets 2B/3/4 always come from the plan chain.
     Both are optional so the endpoint degrades gracefully (a missing source just
-    yields an empty sheet 1/2 rather than an error)."""
-    if not frappe.has_permission("Production Plan", "read", doc=plan):
+    yields an empty sheet 1/2 rather than an error).
+
+    `plan` is optional too ("Download workbook only"): without it the plan-chain
+    sheets are empty and the Action Items sheet lists what to fix before a plan
+    can be built."""
+    if plan and not frappe.has_permission("Production Plan", "read", doc=plan):
         frappe.throw(
             _("You are not permitted to read Production Plan {0}.").format(plan),
             frappe.PermissionError,
         )
+    if not plan and not frappe.has_permission("Production Plan", "read"):
+        frappe.throw(_("You are not permitted to read Production Plans."), frappe.PermissionError)
     if snapshot and not frappe.has_permission("Weekly Planning Snapshot", "read", doc=snapshot):
         frappe.throw(
             _("You are not permitted to read Weekly Planning Snapshot {0}.").format(snapshot),
@@ -128,23 +144,27 @@ def download_unified_planning_workbook(plan, filters=None, snapshot=None):
     wb.remove(wb.active)  # drop the default empty sheet
 
     lines = _planning_lines(filters, snapshot)
-    committed_by_item = _plan_committed_by_item(plan)
+    chain = _build_chain(plan) if plan else []
+    committed_by_item = _plan_committed_by_item(plan) if plan else {}
     # The nested-chain Material Request Plan Items - shared by the Item Requirement
     # and Approved sheets.
-    mr_rows = _collect_mr_rows(_build_chain(plan))
+    mr_rows = _collect_mr_rows(chain)
+    actions = _action_items(plan, chain, lines, committed_by_item)
 
-    _build_cover_sheet(wb, plan, filters, snapshot)
+    _build_cover_sheet(wb, plan, filters, snapshot, actions)
     _build_fg_status_sheet(wb, lines)
     _build_production_requirement_sheet(wb, lines)
     _build_consolidated_requirement_sheet(wb, lines, committed_by_item)
     _build_item_requirement_sheet(wb, mr_rows)
     _build_unique_item_requirement_sheet(wb, mr_rows)
     _build_approved_for_purchase_sheet(wb, mr_rows)
+    _build_action_items_sheet(wb, actions)
 
     stream = BytesIO()
     wb.save(stream)
 
-    frappe.response["filename"] = "Unified_Planning_{0}.xlsx".format(str(plan).replace("/", "-"))
+    stem = str(plan).replace("/", "-") if plan else "Workbook_Only_{0}".format(now_datetime().strftime("%Y%m%d-%H%M"))
+    frappe.response["filename"] = "Unified_Planning_{0}.xlsx".format(stem)
     frappe.response["filecontent"] = stream.getvalue()
     frappe.response["type"] = "binary"
 
@@ -169,7 +189,7 @@ _FILTER_LABELS = {
 }
 
 
-def _build_cover_sheet(wb, plan, filters, snapshot):
+def _build_cover_sheet(wb, plan, filters, snapshot, actions):
     """First sheet: the report title (which differs by origin), a hyperlinked
     reference to the origin document and the Production Plan, and a generated-on
     timestamp.
@@ -180,7 +200,10 @@ def _build_cover_sheet(wb, plan, filters, snapshot):
                       Reservation Manager report view, with its filters listed.
 
     Origin Document and Production Plan cells hyperlink to their desk forms (the
-    FGSRM origin links to the report); links resolve against the site's own URL."""
+    FGSRM origin links to the report); links resolve against the site's own URL.
+
+    Row 2 carries a red banner (linked to the Action Items sheet) when the plan
+    is partial or wasn't created, so nobody mistakes it for the full picture."""
     from openpyxl.styles import Alignment, Font
 
     ws = wb.create_sheet("Cover")
@@ -200,6 +223,15 @@ def _build_cover_sheet(wb, plan, filters, snapshot):
 
     label_font = _bold()
     link_font = Font(color="0563C1", underline="single")
+
+    banner = _cover_banner(plan, actions)
+    if banner:
+        ws.merge_cells("A2:B2")
+        bc = ws.cell(2, 1, banner)
+        bc.font = Font(bold=True, color="C00000", underline="single")
+        bc.hyperlink = "#'{0}'!A1".format(ACTION_ITEMS_SHEET)
+        bc.alignment = Alignment(wrap_text=True, vertical="center")
+        ws.row_dimensions[2].height = 32
 
     def _kv(row, label, value, url=None):
         lc = ws.cell(row, 1, label)
@@ -225,7 +257,10 @@ def _build_cover_sheet(wb, plan, filters, snapshot):
             get_url("/app/query-report/FG Stock Reservation Manager"),
         ); r += 1
 
-    _kv(r, _("Production Plan"), plan, get_url_to_form("Production Plan", plan)); r += 1
+    if plan:
+        _kv(r, _("Production Plan"), plan, get_url_to_form("Production Plan", plan)); r += 1
+    else:
+        _kv(r, _("Production Plan"), _("(not created — workbook only)")); r += 1
     _kv(r, _("Generated On"), format_datetime(now_datetime())); r += 1
     _kv(r, _("Prepared By"), get_fullname(frappe.session.user)); r += 1
 
@@ -251,6 +286,7 @@ def _build_cover_sheet(wb, plan, filters, snapshot):
         _("3. Consolidated Requirement"),
         _("4. Item Requirement"),
         _("5. Approved for Purchase"),
+        _("6. Action Items"),
     ):
         ws.cell(r, 1, name); r += 1
 
@@ -771,6 +807,186 @@ def _purchase_shortage_by_item(mr_rows):
             + flt(reserved_wo.get(item)),
         )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Sheet 6 - Action Items  [readiness blockers / warnings with fix links]
+# --------------------------------------------------------------------------- #
+
+def _action_items(plan, chain, lines, committed_by_item):
+    """What to fix, with links: the readiness check (plan_readiness.py) re-run on
+    every FG with demand, each blocker annotated with its impact on `plan`, plus
+    any FG left out of the plan / sub-assembly missing from the chain that no
+    current issue explains (e.g. fixed since the plan was built - rebuild).
+
+    Returns {rows, left_out, unplanned, blockers, warnings}."""
+    demand = {
+        line["item_code"]
+        for line in lines
+        if line.get("item_code") and flt(line.get("committed_prodn")) > 0
+    }
+    fgs = sorted(demand | set(committed_by_item))
+    readiness = check_readiness(fgs) if fgs else {"issues": []}
+    planned_fgs = set(committed_by_item)
+    left_out = sorted(demand - planned_fgs) if plan else []
+    unplanned = _unplanned_subassemblies(chain)
+
+    rows = []
+    explained = set()
+    for issue in readiness["issues"]:
+        impact = ""
+        if issue["severity"] == BLOCKER:
+            explained.add(issue["item_code"])
+            if not plan:
+                impact = _("No plan created")
+            elif issue["item_code"] in unplanned:
+                impact = _("Not planned — materials below it are missing from the plan")
+            else:
+                missing = [fg for fg in issue["fgs"] if fg not in planned_fgs]
+                if missing:
+                    impact = _("Left out of plan: {0}").format(", ".join(missing))
+        rows.append(dict(issue, impact=impact))
+
+    names = {}
+    extra = [fg for fg in left_out if fg not in explained] + [i for i in sorted(unplanned) if i not in explained]
+    if extra:
+        names = {
+            r.name: r.item_name
+            for r in frappe.get_all("Item", filters={"name": ["in", extra]}, fields=["name", "item_name"])
+        }
+    for fg in left_out:
+        if fg in explained:
+            continue
+        rows.append({
+            "severity": BLOCKER,
+            "message": _("Left out of the plan when it was built (no current issue found — fixed since?)"),
+            "item_code": fg,
+            "item_name": names.get(fg) or "",
+            "path": [fg],
+            "fgs": [fg],
+            "actions": [{"label": _("Open Item"), "route": form_route("Item", fg)}],
+            "impact": _("Left out of plan — rebuild the plan to include it"),
+        })
+    for item in sorted(unplanned):
+        if item in explained:
+            continue
+        rows.append({
+            "severity": BLOCKER,
+            "message": _("Sub-assembly not planned in the chain — check its BOM and the Production Plan"),
+            "item_code": item,
+            "item_name": names.get(item) or "",
+            "path": [item],
+            "fgs": [],
+            "actions": [
+                {"label": _("Create BOM"), "route": new_route("BOM", item=item)},
+                {"label": _("Open Item"), "route": form_route("Item", item)},
+            ],
+            "impact": _("Not planned — materials below it are missing from the plan"),
+        })
+
+    return {
+        "rows": rows,
+        "left_out": left_out,
+        "unplanned": unplanned,
+        "blockers": sum(1 for r in rows if r["severity"] == BLOCKER),
+        "warnings": sum(1 for r in rows if r["severity"] != BLOCKER),
+    }
+
+
+def _unplanned_subassemblies(chain):
+    """{item_code} of Manufacture items in a plan's Raw Materials that never made
+    it into the next plan down the chain (frontec skipped them, or the chain build
+    stopped) - i.e. branches whose materials are missing from the workbook."""
+    out = set()
+    for idx, pp in enumerate(chain):
+        mfg = set(frappe.get_all(
+            "Material Request Plan Item",
+            filters={"parent": pp, "material_request_type": "Manufacture"},
+            pluck="item_code",
+        ))
+        if not mfg:
+            continue
+        below = set()
+        if idx + 1 < len(chain):
+            below = set(frappe.get_all("Production Plan Item", filters={"parent": chain[idx + 1]}, pluck="item_code"))
+        out |= mfg - below
+    return out
+
+
+def _cover_banner(plan, actions):
+    """Red cover-sheet banner text, or None when the plan is complete."""
+    if not plan:
+        return _("Workbook only — no Production Plan was created. {0} blocker(s), {1} warning(s): see Action Items.").format(
+            actions["blockers"], actions["warnings"]
+        )
+    parts = []
+    if actions["left_out"]:
+        parts.append(_("{0} finished good(s) left out").format(len(actions["left_out"])))
+    if actions["unplanned"]:
+        parts.append(_("{0} sub-assembly item(s) not planned").format(len(actions["unplanned"])))
+    if parts:
+        return _("Partial plan — {0}. See Action Items.").format(", ".join(parts))
+    return None
+
+
+def _build_action_items_sheet(wb, actions):
+    """One row per issue: severity (red blocker / amber warning), what's wrong,
+    where it sits in the BOM tree, which FGs it affects, its impact on this plan,
+    and clickable Fix / Open Item links into the ERP."""
+    from openpyxl.styles import Font, PatternFill
+
+    ws = wb.create_sheet(ACTION_ITEMS_SHEET)
+    headers = [
+        "Severity",      # A
+        "Issue",         # B
+        "Item Code",     # C
+        "Item Name",     # D
+        "BOM Path",      # E
+        "Affects (FG)",  # F
+        "Plan Impact",   # G
+        "Fix",           # H  (hyperlink)
+        "Open Item",     # I  (hyperlink)
+    ]
+    _write_header(ws, headers)
+
+    rows = actions["rows"]
+    if not rows:
+        ws.cell(2, 1, _("No issues found — every item in the plan has an active BOM and the data this workbook needs."))
+        _autosize(ws, headers)
+        return
+
+    link_font = Font(color="0563C1", underline="single")
+    fills = {
+        BLOCKER: PatternFill(fill_type="solid", fgColor="FFC7CE"),
+        "warning": PatternFill(fill_type="solid", fgColor="FFEB9C"),
+    }
+    open_item_label = _("Open Item")
+
+    r = 2
+    for row in rows:
+        sev = row["severity"]
+        c = ws.cell(r, 1, _("Blocker") if sev == BLOCKER else _("Warning"))
+        c.fill = fills.get(sev, fills["warning"])
+        ws.cell(r, 2, row.get("message"))
+        ws.cell(r, 3, row.get("item_code"))
+        ws.cell(r, 4, row.get("item_name"))
+        ws.cell(r, 5, " > ".join(row.get("path") or []))
+        ws.cell(r, 6, ", ".join(row.get("fgs") or []))
+        ws.cell(r, 7, row.get("impact") or "")
+        acts = row.get("actions") or []
+        fix = next((a for a in acts if a["label"] != open_item_label), None)
+        opener = next((a for a in acts if a["label"] == open_item_label), None)
+        for col, act in ((8, fix), (9, opener)):
+            if act:
+                c = ws.cell(r, col, act["label"])
+                c.hyperlink = get_url(act["route"])
+                c.font = link_font
+        r += 1
+
+    for col, width in zip("ABCDEFGHI", (10, 55, 18, 30, 40, 30, 45, 24, 12)):
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = "A1:I{0}".format(r - 1)
 
 
 # --------------------------------------------------------------------------- #

@@ -69,6 +69,7 @@ from playground.playground.fgsrm_manual_requirement import (
 	list_manual_requirements,
 	manual_requirement_qty_by_item,
 )
+from playground.playground.plan_readiness import check_readiness
 
 # --------------------------------------------------------------------------- #
 # Integration with the site's custom Production Plan subsystem (separate app).
@@ -89,6 +90,14 @@ FROTEC_GET_ITEMS_FN = "trigger_get_item_for_mr"   # seeds the root's mr_items
 FROTEC_FULL_CHAIN_FN = "create_full_hierarchy"    # builds the nested plan chain
 # custom_purpose for the FGSRM-created root plan (decided with the user).
 FGSRM_PLAN_PURPOSE = "Planning"
+
+# How Create Prodn Plan handles readiness blockers (see plan_readiness.py):
+#   branches -> leave out only FGs that can't be planned at all (no BOM, disabled,
+#               ...); a broken sub-assembly deeper down is skipped by frontec's
+#               chain build, so the rest of that FG still gets planned.
+#   fgs      -> leave out every FG with a blocker anywhere in its BOM tree.
+EXCLUDE_BRANCHES = "branches"
+EXCLUDE_FGS = "fgs"
 
 
 def _frotec_attr(name):
@@ -863,7 +872,44 @@ def _suggested_prodn_by_item(filters):
 
 
 @frappe.whitelist()
-def create_production_plan_from_suggested_prodn(filters=None):
+def check_production_plan_readiness(filters=None, snapshot=None):
+	"""Pre-flight for Create Prodn Plan: the readiness of every FG the plan would
+	carry (from the report's `filters`, or a Weekly Planning Snapshot's Committed
+	Prodn) - blockers and warnings with fix links, see plan_readiness.py. Nothing
+	is created."""
+	if not frappe.has_permission("Production Plan", "create"):
+		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
+	prodn_by_item = _prodn_for(filters, snapshot)
+	result = check_readiness(sorted(prodn_by_item))
+	result["items"] = len(prodn_by_item)
+	return result
+
+
+def _prodn_for(filters=None, snapshot=None):
+	"""{item_code: qty} the plan would be built from - a snapshot's itemwise
+	Committed Prodn, else the report's itemwise Suggested Prodn for `filters`.
+	Throws when there's nothing to produce."""
+	if snapshot:
+		if not frappe.has_permission("Weekly Planning Snapshot", "read", doc=snapshot):
+			frappe.throw(_("You are not permitted to read this Weekly Planning Snapshot."), frappe.PermissionError)
+		prodn_by_item = {}
+		for d in frappe.get_doc("Weekly Planning Snapshot", snapshot).items:
+			qty = flt(d.committed_prodn)
+			if qty > 0:
+				prodn_by_item[d.item_code] = prodn_by_item.get(d.item_code, 0.0) + qty
+		if not prodn_by_item:
+			frappe.throw(_("Nothing to produce — every line's Committed Prodn is zero."))
+		return prodn_by_item
+
+	filters = frappe.parse_json(filters) if filters else {}
+	prodn_by_item = _suggested_prodn_by_item(filters)
+	if not prodn_by_item:
+		frappe.throw(_("Nothing to produce — every item's Suggested Prodn is zero for this view."))
+	return prodn_by_item
+
+
+@frappe.whitelist()
+def create_production_plan_from_suggested_prodn(filters=None, exclude_mode=None):
 	"""Create a DRAFT Production Plan from the report's itemwise Suggested Prodn,
 	then populate the full nested sub-assembly chain and the raw materials for
 	purchase, and save it (never auto-submitted). Recomputed server-side from
@@ -874,7 +920,8 @@ def create_production_plan_from_suggested_prodn(filters=None):
 	expects:
 	  1. Root plan tagged custom_purpose = "Planning" (drives that app's naming
 	     series and submit cascade) with one po_items row per item = its
-	     Suggested Prodn (needs an active default BOM; others skipped + reported).
+	     Suggested Prodn. FGs that fail the readiness check are left out per
+	     `exclude_mode` (EXCLUDE_BRANCHES / EXCLUDE_FGS) and reported back.
 	  2. "Display Zero Value" -> custom_display_zero_value (that app's field, and
 	     one of its SYNC_FIELDS propagated down the chain).
 	  3. Get Raw Materials for Purchase -> seed the root's mr_items via that app's
@@ -893,39 +940,38 @@ def create_production_plan_from_suggested_prodn(filters=None):
 	a plan that app's hierarchy/Excel features don't recognise."""
 	if not frappe.has_permission("Production Plan", "create"):
 		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
-
-	filters = frappe.parse_json(filters) if filters else {}
-
-	prodn_by_item = _suggested_prodn_by_item(filters)
-	if not prodn_by_item:
-		frappe.throw(_("Nothing to produce — every item's Suggested Prodn is zero for this view."))
-
-	return _build_production_plan(prodn_by_item)
+	return _build_production_plan(_prodn_for(filters=filters), exclude_mode)
 
 
 @frappe.whitelist()
-def create_production_plan_from_snapshot(snapshot):
+def create_production_plan_from_snapshot(snapshot, exclude_mode=None):
 	"""Build a Production Plan from a Weekly Planning Snapshot's itemwise Committed
 	Prodn (what production commits to produce), then the nested chain + workbook -
 	same builder as the FGSRM report."""
 	if not frappe.has_permission("Production Plan", "create"):
 		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
-	doc = frappe.get_doc("Weekly Planning Snapshot", snapshot)
-	prodn_by_item = {}
-	for d in doc.items:
-		qty = flt(d.committed_prodn)
-		if qty > 0:
-			prodn_by_item[d.item_code] = prodn_by_item.get(d.item_code, 0.0) + qty
-	if not prodn_by_item:
-		frappe.throw(_("Nothing to produce — every line's Committed Prodn is zero."))
-	return _build_production_plan(prodn_by_item)
+	return _build_production_plan(_prodn_for(snapshot=snapshot), exclude_mode)
 
 
-def _build_production_plan(prodn_by_item):
+def _build_production_plan(prodn_by_item, exclude_mode=None):
 	"""Build a DRAFT Production Plan from {item_code: qty}: tag it for the frontec
 	subsystem, seed raw materials + the full nested chain, and return a summary.
 	Shared by create_production_plan_from_suggested_prodn (FGSRM) and
-	create_production_plan_from_snapshot (Weekly Planning Snapshot)."""
+	create_production_plan_from_snapshot (Weekly Planning Snapshot).
+
+	Never fails on bad master data as long as one FG is plannable: readiness
+	blockers leave FGs out per `exclude_mode`, frontec's chain build skips
+	sub-assemblies it can't plan, and a hand-off error is returned rather than
+	raised - the caller downloads the workbook regardless, whose Action Items
+	sheet lists every fix."""
+	exclude_mode = EXCLUDE_FGS if exclude_mode == EXCLUDE_FGS else EXCLUDE_BRANCHES
+	readiness = check_readiness(sorted(prodn_by_item))
+	blocked = readiness["tree_blocked"] if exclude_mode == EXCLUDE_FGS else readiness["root_blocked"]
+	excluded = [
+		{"item_code": item, "qty": prodn_by_item[item], "reason": "; ".join(reasons)}
+		for item, reasons in sorted(blocked.items())
+	]
+
 	company = (
 		frappe.defaults.get_user_default("Company")
 		or frappe.db.get_single_value("Global Defaults", "default_company")
@@ -948,14 +994,10 @@ def _build_production_plan(prodn_by_item):
 	# warehouses arg. Point it at the FG stores warehouse the report works in.
 	pp.for_warehouse = STOCK_WAREHOUSE
 
-	skipped = []
+	excluded_items = {e["item_code"] for e in excluded}
 	for item, qty in prodn_by_item.items():
-		item_detail = frappe.db.get_value("Item", item, ["stock_uom", "default_bom"], as_dict=True) or frappe._dict()
-		bom_no = item_detail.default_bom or frappe.db.get_value(
-			"BOM", {"item": item, "is_default": 1, "is_active": 1, "docstatus": 1}, "name"
-		)
-		if not bom_no:
-			skipped.append(item)
+		bom_no = readiness["boms"].get(item)
+		if item in excluded_items or not bom_no:
 			continue
 		pp.append(
 			"po_items",
@@ -964,14 +1006,17 @@ def _build_production_plan(prodn_by_item):
 				"bom_no": bom_no,
 				"planned_qty": qty,
 				"planned_start_date": nowdate(),
-				"stock_uom": item_detail.stock_uom,
+				"stock_uom": frappe.db.get_value("Item", item, "stock_uom"),
 				"warehouse": STOCK_WAREHOUSE,
 			},
 		)
 
 	if not pp.get("po_items"):
 		frappe.throw(
-			_("No Production Plan rows — none of the items with Suggested Prodn have an active default BOM.")
+			_("No Production Plan rows — every finished good was left out:<br>{0}<br><br>Use Download workbook only to get the Action Items list with fix links.").format(
+				"<br>".join(frappe.utils.escape_html("{0}: {1}".format(e["item_code"], e["reason"])) for e in excluded)
+			),
+			title=_("Nothing could be planned"),
 		)
 
 	pp.insert()
@@ -981,9 +1026,15 @@ def _build_production_plan(prodn_by_item):
 	get_items = _frotec_attr(FROTEC_GET_ITEMS_FN)
 	full_chain = _frotec_attr(FROTEC_FULL_CHAIN_FN)
 	handed_off = False
+	handoff_error = None
+	not_planned = []
 	raw_material_count = 0
 
 	if get_items and full_chain:
+		# A throw inside the hand-off also queues its message for the browser; we
+		# report the error in the response instead, so drop what it queued.
+		message_log = getattr(frappe.local, "message_log", None)
+		log_len = len(message_log) if message_log is not None else 0
 		try:
 			# 3. Seed the root's Raw Materials for Purchase. trigger_get_item_for_mr
 			# takes (PP_doc, warehouses) and does NOT save itself, so save after.
@@ -996,23 +1047,29 @@ def _build_production_plan(prodn_by_item):
 			# plain dict would break). It runs in its own savepoint: on error it
 			# rolls back the child chain, leaving the tagged root + its mr_items.
 			# Not idempotent (throws if children already exist) - fine here since we
-			# always build on a freshly-created root.
-			full_chain(pp)
+			# always build on a freshly-created root. Frontec skips sub-assemblies it
+			# can't plan (no BOM, ...) and returns them as `skipped`.
+			result = full_chain(pp)
+			if isinstance(result, dict):
+				not_planned = result.get("skipped") or []
 			handed_off = True
-		except Exception:
+		except Exception as e:
 			frappe.log_error(title="FGSRM Create Prodn Plan: hierarchy hand-off failed for {0}".format(pp.name))
-
-	if skipped:
-		frappe.msgprint(
-			_("Skipped (no active default BOM): {0}").format(", ".join(sorted(set(skipped)))),
-			indicator="orange",
-			alert=True,
-		)
+			if message_log is not None:
+				del message_log[log_len:]
+			handoff_error = frappe.utils.strip_html(str(e)) or e.__class__.__name__
 
 	return {
 		"name": pp.name,
 		"items": len(pp.get("po_items") or []),
 		"raw_materials": raw_material_count,
 		"handed_off": handed_off,
-		"skipped": skipped,
+		"handoff_error": handoff_error,
+		"exclude_mode": exclude_mode,
+		# FGs left out of the root plan, and sub-assemblies frontec left out of the
+		# chain - both are also listed (with fix links) on the workbook's Action Items.
+		"excluded": excluded,
+		"not_planned": not_planned,
+		"blockers": readiness["blocker_count"],
+		"warnings": readiness["warning_count"],
 	}

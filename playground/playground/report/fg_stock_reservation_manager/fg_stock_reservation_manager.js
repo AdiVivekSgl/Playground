@@ -35,9 +35,12 @@ const FGSRM_MR_METHOD_PATH = "playground.playground.fgsrm_manual_requirement";
 // workbook's "FGSRM" sheet reflects the same view that produced the plan.
 // Download the unified 4-sheet planning workbook for a created plan, passing the
 // current FGSRM filters so sheets 1-2 reflect the view that produced the plan.
+// `pp_name` may be null ("Download workbook only" - no plan was created).
 function fgsrm_download_unified_workbook(pp_name, filters_json) {
-	let url = `/api/method/${UNIFIED_WORKBOOK_METHOD}?plan=${encodeURIComponent(pp_name)}`;
-	if (filters_json) url += `&filters=${encodeURIComponent(filters_json)}`;
+	const params = [];
+	if (pp_name) params.push(`plan=${encodeURIComponent(pp_name)}`);
+	if (filters_json) params.push(`filters=${encodeURIComponent(filters_json)}`);
+	const url = `/api/method/${UNIFIED_WORKBOOK_METHOD}?${params.join("&")}`;
 	const a = document.createElement("a");
 	a.href = url;
 	a.target = "_blank";
@@ -1105,51 +1108,21 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		);
 
 		// ── Create a draft Production Plan from the itemwise Suggested Prodn ──
+		// Readiness check first (missing BOMs etc., with fix links), then build and
+		// always download the workbook - see public/js/plan_readiness.js.
 		report.page.add_inner_button(
 			__("Create Prodn Plan"),
 			() => {
-				frappe.confirm(
-					__("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the unified planning workbook — no need to open the plan."),
-					() => {
-						frappe.call({
-							method: `${FGSRM_METHOD_PATH}.create_production_plan_from_suggested_prodn`,
-							args: { filters: JSON.stringify(frappe.query_report.get_filter_values()) },
-							freeze: true,
-							freeze_message: __("Creating Production Plan…"),
-							callback(r) {
-								const m = r.message;
-								if (!m || !m.name) return;
-								if (m.handed_off) {
-									// Success: chain + raw materials are built, so the
-									// unified workbook (incl. the BOM-level and purchase
-									// sheets) is meaningful — download it straight away
-									// and stay on the report.
-									frappe.show_alert({
-										message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading unified planning workbook…", [
-											m.name,
-											m.items,
-											m.raw_materials,
-										]),
-										indicator: "green",
-									});
-									fgsrm_download_unified_workbook(m.name, JSON.stringify(frappe.query_report.get_filter_values()));
-								} else {
-									// Chain didn't build (frontec hand-off unavailable
-									// or errored) — the workbook would be incomplete, so
-									// send the user to the draft to finish it manually.
-									frappe.show_alert({
-										message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the unified planning workbook.", [
-											m.name,
-											m.items,
-										]),
-										indicator: "blue",
-									});
-									frappe.set_route("Form", "Production Plan", m.name);
-								}
-							},
-						});
-					}
-				);
+				const filters_json = JSON.stringify(frappe.query_report.get_filter_values());
+				frappe.require("/assets/playground/js/plan_readiness.js", () => {
+					playground.plan_readiness.run({
+						check_args: { filters: filters_json },
+						build_method: `${FGSRM_METHOD_PATH}.create_production_plan_from_suggested_prodn`,
+						build_args: { filters: filters_json },
+						confirm_text: __("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the unified planning workbook — no need to open the plan."),
+						download: (plan) => fgsrm_download_unified_workbook(plan, filters_json),
+					});
+				});
 			},
 			__("Reports")
 		);

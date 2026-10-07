@@ -34,9 +34,12 @@ function wps_money0(v) {
 	return format_number(val, null, 0);
 }
 
+// `pp_name` may be null ("Download workbook only" - no plan was created).
 function wps_download_unified_workbook(pp_name, snapshot) {
-	let url = `/api/method/${UNIFIED_WORKBOOK_METHOD}?plan=${encodeURIComponent(pp_name)}`;
-	if (snapshot) url += `&snapshot=${encodeURIComponent(snapshot)}`;
+	const params = [];
+	if (pp_name) params.push(`plan=${encodeURIComponent(pp_name)}`);
+	if (snapshot) params.push(`snapshot=${encodeURIComponent(snapshot)}`);
+	const url = `/api/method/${UNIFIED_WORKBOOK_METHOD}?${params.join("&")}`;
 	const a = document.createElement("a");
 	a.href = url;
 	a.target = "_blank";
@@ -363,40 +366,16 @@ function wps_allocate(frm, item_code, new_total) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Readiness check first (missing BOMs etc., with fix links), then build and
+// always download the workbook - see public/js/plan_readiness.js.
 function wps_create_prodn_plan(frm) {
-	frappe.confirm(
-		__("Create a draft Production Plan from this snapshot's itemwise Committed Prodn? It builds the full nested plan chain and raw materials, then downloads the unified planning workbook. Save any edits first."),
-		() => {
-			frappe.call({
-				method: WPS_CREATE_PLAN_METHOD,
-				args: { snapshot: frm.doc.name },
-				freeze: true,
-				freeze_message: __("Creating Production Plan…"),
-				callback(r) {
-					const m = r.message;
-					if (!m || !m.name) return;
-					if (m.handed_off) {
-						frappe.show_alert({
-							message: __("Production Plan {0}: {1} item(s), {2} raw material line(s), full chain built. Downloading unified planning workbook…", [
-								m.name,
-								m.items,
-								m.raw_materials,
-							]),
-							indicator: "green",
-						});
-						wps_download_unified_workbook(m.name, frm.doc.name);
-					} else {
-						frappe.show_alert({
-							message: __("Draft Production Plan {0} created with {1} item(s). Open it and click “Create Full Chain”, then download the workbook.", [
-								m.name,
-								m.items,
-							]),
-							indicator: "blue",
-						});
-						frappe.set_route("Form", "Production Plan", m.name);
-					}
-				},
-			});
-		}
-	);
+	frappe.require("/assets/playground/js/plan_readiness.js", () => {
+		playground.plan_readiness.run({
+			check_args: { snapshot: frm.doc.name },
+			build_method: WPS_CREATE_PLAN_METHOD,
+			build_args: { snapshot: frm.doc.name },
+			confirm_text: __("Create a draft Production Plan from this snapshot's itemwise Committed Prodn? It builds the full nested plan chain and raw materials, then downloads the unified planning workbook. Save any edits first."),
+			download: (plan) => wps_download_unified_workbook(plan, frm.doc.name),
+		});
+	});
 }

@@ -925,11 +925,11 @@ def create_production_plan_from_suggested_prodn(filters=None, exclude_mode=None)
 	  2. "Display Zero Value" -> custom_display_zero_value (that app's field, and
 	     one of its SYNC_FIELDS propagated down the chain).
 	  3. Get Raw Materials for Purchase -> seed the root's mr_items via that app's
-	     trigger_get_item_for_mr. NB this uses STOCK ERPNext RM computation, not
-	     frontec's whitelisted override (a direct Python call isn't intercepted by
-	     override_whitelisted_methods) - consistent with what the chain build uses
-	     internally, and it avoids the 0-qty Manufacture rows that "Display Zero
-	     Value" would otherwise spawn and roll the whole hierarchy back on.
+	     trigger_get_item_for_mr - which imports frontec's own
+	     get_items_for_material_requests_override, so with "Display Zero Value"
+	     on it also lists 0-qty rows (items fully covered by stock). Frontec's
+	     chain build drops 0-qty Manufacture rows before creating a child plan
+	     (ERPNext rejects Planned Qty 0).
 	  4. "Full Nested Chain" -> that app's create_full_hierarchy, building the
 	     linked child-plan chain that MR Hierarchy Excel later flattens.
 

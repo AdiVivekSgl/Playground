@@ -36,7 +36,15 @@ const FGSRM_MR_METHOD_PATH = "playground.playground.fgsrm_manual_requirement";
 // Download the unified 4-sheet planning workbook for a created plan, passing the
 // current FGSRM filters so sheets 1-2 reflect the view that produced the plan.
 // `pp_name` may be null ("Download workbook only" - no plan was created).
-function fgsrm_download_unified_workbook(pp_name, filters_json) {
+// `selection_json` (the ticked rows, see fgsrm_plan_selection) can be long, so
+// it's sent as a POST form instead of in the URL.
+function fgsrm_download_unified_workbook(pp_name, filters_json, selection_json) {
+	if (selection_json) {
+		const args = { filters: filters_json, selection: selection_json };
+		if (pp_name) args.plan = pp_name;
+		open_url_post(`/api/method/${UNIFIED_WORKBOOK_METHOD}`, args);
+		return;
+	}
 	const params = [];
 	if (pp_name) params.push(`plan=${encodeURIComponent(pp_name)}`);
 	if (filters_json) params.push(`filters=${encodeURIComponent(filters_json)}`);
@@ -59,6 +67,25 @@ function fgsrm_checked_rows() {
 	const data = frappe.query_report.data || [];
 	if (!dt || !dt.rowmanager || !dt.rowmanager.getCheckedRows) return [];
 	return (dt.rowmanager.getCheckedRows() || []).map((i) => data[i]).filter(Boolean);
+}
+
+// The ticked rows as the server's plan `selection` ({so_items, sales_orders,
+// manual} - see parse_selection in the .py), or null when nothing usable is
+// ticked. SO lines go by Sales Order Item; a "Group by Sales Order" summary row
+// by its Sales Order (= all its lines); manual requirement rows by name. The
+// TOTAL row is ignored.
+function fgsrm_plan_selection() {
+	const selection = { so_items: [], sales_orders: [], manual: [] };
+	let count = 0;
+	for (const row of fgsrm_checked_rows()) {
+		if (row.is_total) continue;
+		if (row.is_manual && row.manual_name) selection.manual.push(row.manual_name);
+		else if (row.sales_order_item) selection.so_items.push(row.sales_order_item);
+		else if (row.sales_order) selection.sales_orders.push(row.sales_order);
+		else continue;
+		count++;
+	}
+	return count ? { selection, count } : null;
 }
 
 // Calls create_reservations and, if the server reports any `blocked` items
@@ -1110,17 +1137,27 @@ frappe.query_reports["FG Stock Reservation Manager"] = {
 		// ── Create a draft Production Plan from the itemwise Suggested Prodn ──
 		// Readiness check first (missing BOMs etc., with fix links), then build and
 		// always download the workbook - see public/js/plan_readiness.js.
+		// With rows ticked, only those rows are planned and downloaded; with none
+		// ticked, the whole filtered view (as before).
 		report.page.add_inner_button(
 			__("Create Prodn Plan"),
 			() => {
 				const filters_json = JSON.stringify(frappe.query_report.get_filter_values());
+				const sel = fgsrm_plan_selection();
+				const selection_json = sel ? JSON.stringify(sel.selection) : null;
+				const scope = sel
+					? __("Only the {0} ticked row(s)", [sel.count])
+					: __("All rows in the current view (tick rows to plan only those)");
 				frappe.require("/assets/playground/js/plan_readiness.js", () => {
 					playground.plan_readiness.run({
-						check_args: { filters: filters_json },
+						check_args: { filters: filters_json, selection: selection_json },
 						build_method: `${FGSRM_METHOD_PATH}.create_production_plan_from_suggested_prodn`,
-						build_args: { filters: filters_json },
-						confirm_text: __("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the unified planning workbook — no need to open the plan."),
-						download: (plan) => fgsrm_download_unified_workbook(plan, filters_json),
+						build_args: { filters: filters_json, selection: selection_json },
+						scope_label: scope,
+						confirm_text: sel
+							? __("Create a draft Production Plan from the Suggested Prodn of the {0} ticked row(s)? It will build the full nested plan chain and raw materials, then download the unified planning workbook for those rows.", [sel.count])
+							: __("Create a draft Production Plan from the itemwise Suggested Prodn for the current filters? It will build the full nested plan chain and raw materials, then download the unified planning workbook — no need to open the plan."),
+						download: (plan) => fgsrm_download_unified_workbook(plan, filters_json, selection_json),
 					});
 				});
 			},

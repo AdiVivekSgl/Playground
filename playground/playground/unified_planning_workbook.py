@@ -96,7 +96,8 @@ from frappe.utils import (
 )
 
 from playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager import (
-    execute as fgsrm_execute,
+    parse_selection,
+    selected_report_rows,
 )
 from playground.playground.report.production_requirement_report.production_requirement_report import (
     get_stock_map,
@@ -115,7 +116,7 @@ _HEADER_FILL = "D3D3D3"
 
 
 @frappe.whitelist()
-def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
+def download_unified_planning_workbook(plan=None, filters=None, snapshot=None, selection=None):
     """Stream the unified workbook for Production Plan `plan`: a Cover sheet
     followed by the planning sheets and an Action Items sheet.
 
@@ -147,7 +148,8 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # drop the default empty sheet
 
-    lines = _planning_lines(filters, snapshot)
+    selection = None if snapshot else parse_selection(selection)
+    lines = _planning_lines(filters, snapshot, selection)
     chain = _build_chain(plan) if plan else []
     committed_by_item = _plan_committed_by_item(plan) if plan else {}
     # The nested-chain Material Request Plan Items - shared by the Item Requirement
@@ -155,7 +157,7 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
     mr_rows = _collect_mr_rows(chain)
     actions = _action_items(plan, chain, lines, committed_by_item)
 
-    _build_cover_sheet(wb, plan, filters, snapshot, actions)
+    _build_cover_sheet(wb, plan, filters, snapshot, actions, selection)
     fg_total = _build_fg_status_sheet(wb, lines)
     prodn_total = _build_production_requirement_sheet(wb, lines)
     _build_consolidated_requirement_sheet(wb, lines, committed_by_item)
@@ -195,7 +197,7 @@ _FILTER_LABELS = {
 }
 
 
-def _build_cover_sheet(wb, plan, filters, snapshot, actions):
+def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
     """First sheet: the report title (which differs by origin), a hyperlinked
     reference to the origin document and the Production Plan, and a generated-on
     timestamp.
@@ -281,6 +283,9 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions):
                 _kv(r, label, value); r += 1
         else:
             ws.cell(r, 1, _("(none — full open-order view)")); r += 1
+        if selection:
+            ticked = sum(len(v) for v in selection.values())
+            _kv(r, _("Rows"), _("Only the {0} ticked row(s)").format(ticked)); r += 1
 
     # Contents index.
     r += 1
@@ -388,7 +393,7 @@ def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total):
 # Shared line model for sheets 1 & 2
 # --------------------------------------------------------------------------- #
 
-def _planning_lines(filters, snapshot):
+def _planning_lines(filters, snapshot, selection=None):
     """Normalise the demand into one list of per-line dicts both sheet 1 and
     sheet 2 render from, so the two never drift.
 
@@ -398,8 +403,8 @@ def _planning_lines(filters, snapshot):
     reserved_by_customer, material_status, sales_status, source, is_buffer."""
     if snapshot:
         return _lines_from_snapshot(snapshot)
-    if filters:
-        return _lines_from_fgsrm(filters)
+    if filters or selection:
+        return _lines_from_fgsrm(filters, selection)
     return []
 
 
@@ -444,13 +449,14 @@ def _lines_from_snapshot(snapshot):
     return lines
 
 
-def _lines_from_fgsrm(filters):
-    """Per-line model from the live FGSRM report for `filters`. Committed Prodn
-    mirrors Suggested Prodn (the plan is built from Suggested); Valuation Rate is
-    enriched from STOCK_WAREHOUSE so sheet 2 can still value the commitment. The
-    report's own TOTAL row is dropped - each sheet appends its own."""
-    _columns, rows = fgsrm_execute(dict(filters or {}))
-    rows = [r for r in rows if not r.get("is_total")]
+def _lines_from_fgsrm(filters, selection=None):
+    """Per-line model from the live FGSRM report for `filters`, narrowed to the
+    ticked rows when `selection` is given (so the workbook covers exactly what
+    was planned). Committed Prodn mirrors Suggested Prodn (the plan is built from
+    Suggested); Valuation Rate is enriched from STOCK_WAREHOUSE so sheet 2 can
+    still value the commitment. Always per line (never the grouped-by-SO
+    summary) and without the report's TOTAL row - each sheet appends its own."""
+    rows = selected_report_rows(filters, selection)
 
     item_codes = sorted({r.get("item_code") for r in rows if r.get("item_code")})
     stock_map = get_stock_map(item_codes)

@@ -23,6 +23,10 @@ are in-cell formulas so the workbook stays live when edited):
                                        FGSRM, "Urgent Shortage Against Weekly
                                        Commitment" from WPS), hyperlinked origin +
                                        plan, and a generated-on stamp.
+     "Summary"                      - headline figures as live formulas on the
+                                       other sheets' TOTAL rows: Pending Dispatches
+                                       (sheet 1 cols E / M), Suggested Prodn (sheet 2
+                                       cols E / H), Purchase Budget (sheet 5 col G).
   1. "FG Reservation Status"        - the FGSRM picture per open SO line: Pending,
                                        Reserved, Short to Complete (=Pending−Reserved,
                                        formula), Item Free Stock, Suggested Prodn,
@@ -152,13 +156,15 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
     actions = _action_items(plan, chain, lines, committed_by_item)
 
     _build_cover_sheet(wb, plan, filters, snapshot, actions)
-    _build_fg_status_sheet(wb, lines)
-    _build_production_requirement_sheet(wb, lines)
+    fg_total = _build_fg_status_sheet(wb, lines)
+    prodn_total = _build_production_requirement_sheet(wb, lines)
     _build_consolidated_requirement_sheet(wb, lines, committed_by_item)
     _build_item_requirement_sheet(wb, mr_rows)
     _build_unique_item_requirement_sheet(wb, mr_rows)
-    _build_approved_for_purchase_sheet(wb, mr_rows)
+    purchase_total = _build_approved_for_purchase_sheet(wb, mr_rows)
     _build_action_items_sheet(wb, actions)
+    # Built last (it points at the other sheets' TOTAL rows), placed after Cover.
+    _build_summary_sheet(wb, fg_total, prodn_total, purchase_total)
 
     stream = BytesIO()
     wb.save(stream)
@@ -281,6 +287,7 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions):
     ws.cell(r, 1, _("Contents")).font = label_font
     r += 1
     for name in (
+        _("Summary"),
         _("1. FG Reservation Status"),
         _("2. Production Requirement"),
         _("3. Consolidated Requirement"),
@@ -313,6 +320,68 @@ def _humanize_filters(filters):
         label = _(_FILTER_LABELS.get(key) or key.replace("_", " ").title())
         out.append((label, shown))
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Summary sheet (second tab, after Cover)
+# --------------------------------------------------------------------------- #
+
+SUMMARY_SHEET = "Summary"
+
+
+def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total):
+    """Headline figures, each a live formula on another sheet's TOTAL row so it
+    stays in step when those sheets are edited:
+
+      Pending Dispatches - Count = FG Reservation Status col E (Pending Qty),
+                           Value = col M (Pending Dispatch Value)
+      Suggested Prodn    - Count = Production Requirement col E (Suggested Prodn),
+                           Value = col H (Committed Value)
+      Purchase Budget    - Value = Approved for Purchase col G (Value)
+
+    `*_total` is the source sheet's TOTAL row, or None when that sheet has no data
+    (the figure is then 0). Inserted as the second tab, right after Cover."""
+    from openpyxl.styles import Font
+
+    ws = wb.create_sheet(SUMMARY_SHEET, 1)
+    ws.cell(1, 1, _("Summary")).font = Font(bold=True, size=14)
+    headers = ["Metric", "Count", "Value", "Source"]
+    _write_header(ws, headers, row=3)
+
+    def ref(sheet, col, total_row):
+        return "='{0}'!{1}{2}".format(sheet, col, total_row) if total_row else 0
+
+    rows = [
+        (
+            _("Pending Dispatches"),
+            ref("FG Reservation Status", "E", fg_total),
+            ref("FG Reservation Status", "M", fg_total),
+            _("FG Reservation Status: Pending Qty (E), Pending Dispatch Value (M)"),
+        ),
+        (
+            _("Suggested Prodn"),
+            ref("Production Requirement", "E", prodn_total),
+            ref("Production Requirement", "H", prodn_total),
+            _("Production Requirement: Suggested Prodn (E), Committed Value (H)"),
+        ),
+        (
+            _("Purchase Budget"),
+            None,
+            ref(APPROVED_SHEET, "G", purchase_total),
+            _("Approved for Purchase: Value (G)"),
+        ),
+    ]
+    r = 4
+    for label, count, value, source in rows:
+        ws.cell(r, 1, label).font = _bold()
+        if count is not None:
+            ws.cell(r, 2, count).number_format = "#,##0.##"
+        ws.cell(r, 3, value).number_format = "#,##0.00"
+        ws.cell(r, 4, source)
+        r += 1
+
+    for col, width in zip("ABCD", (22, 14, 18, 62)):
+        ws.column_dimensions[col].width = width
 
 
 # --------------------------------------------------------------------------- #
@@ -490,8 +559,9 @@ def _build_fg_status_sheet(wb, lines):
 
     # TOTAL row - sum only the columns that legitimately add up (Item Free Stock is
     # a per-item figure repeated on every line, so it is deliberately not summed).
+    total_row = None
     if lines:
-        _bold_cells(ws, r, {
+        total_row = _bold_cells(ws, r, {
             1: _("TOTAL"),
             5: sum(flt(l.get("pending_qty")) for l in lines),
             6: sum(flt(l.get("reserved_qty")) for l in lines),
@@ -499,6 +569,7 @@ def _build_fg_status_sheet(wb, lines):
             13: sum(flt(l.get("pending_value")) for l in lines),
         })
     _autosize(ws, headers)
+    return total_row
 
 
 # --------------------------------------------------------------------------- #
@@ -538,9 +609,10 @@ def _build_production_requirement_sheet(wb, lines):
         ws.cell(r, 9, flt(line.get("committed_prodn")) * sale_rate)
         r += 1
 
+    total_row = None
     if lines:
         last = r - 1
-        _bold_cells(ws, r, {
+        total_row = _bold_cells(ws, r, {
             1: _("TOTAL"),
             5: sum(flt(l.get("suggested_prodn")) for l in lines),
             6: sum(flt(l.get("committed_prodn")) for l in lines),
@@ -548,6 +620,7 @@ def _build_production_requirement_sheet(wb, lines):
             9: "=SUM(I2:I{last})".format(last=last),
         })
     _autosize(ws, headers)
+    return total_row
 
 
 # --------------------------------------------------------------------------- #
@@ -737,7 +810,7 @@ def _build_approved_for_purchase_sheet(wb, mr_rows):
     purchase_items = sorted(k for k, v in short_by_item.items() if v > 0)
     if not purchase_items:
         _autosize(ws, headers)
-        return
+        return None
 
     info = _item_info_map(purchase_items)
     vendors = _default_supplier_map(purchase_items)
@@ -758,15 +831,17 @@ def _build_approved_for_purchase_sheet(wb, mr_rows):
         r += 1
 
     # TOTAL row - the PAS reader skips a row whose column A is "Total".
+    total_row = None
     if r > first:
         last = r - 1
-        _bold_cells(ws, r, {
+        total_row = _bold_cells(ws, r, {
             1: _("Total"),
             2: "=SUM(B{a}:B{b})".format(a=first, b=last),
             4: "=SUM(D{a}:D{b})".format(a=first, b=last),
             7: "=SUM(G{a}:G{b})".format(a=first, b=last),
         })
     _autosize(ws, headers)
+    return total_row
 
 
 def _purchase_shortage_by_item(mr_rows):

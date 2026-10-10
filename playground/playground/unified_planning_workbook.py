@@ -48,7 +48,9 @@ are in-cell formulas so the workbook stays live when edited):
                                        Open WO, Projected Incoming from Open WO) plus a
                                        Shortage formula:
                                          Shortage = MAX(0, Qty As Per BOM − Qty In Stock
-                                           − Projected Incoming − Ordered + Reserved).
+                                           − Projected Incoming − Ordered + Reserved
+                                           + Safety Stock).
+                                       (Safety Stock = Item.safety_stock, col K.)
                                        Plus an Inventory Rate column (STOCK_WAREHOUSE
                                        valuation rate — the same source as sheet 2's
                                        col G); the TOTAL row carries SUMPRODUCT(Qty As
@@ -57,8 +59,9 @@ are in-cell formulas so the workbook stays live when edited):
   4b. "Unique Item Requirement"     - the Item Requirement rows deduped to one row per
                                        item, with Qty As Per BOM summed across levels.
   5. "Approved for Purchase"        - the buy-list: purchasable items' shortage
-                                       aggregated once per item, with a manual Buffer
-                                       column (Total Qty = Short Qty + Buffer). Column
+                                       aggregated once per item, with a Buffer column
+                                       defaulting to the Safety Stock top-up (editable;
+                                       Total Qty = Short Qty + Buffer). Column
                                        A = Item; the PAS reader takes the purchase qty
                                        as Short Qty + Buffer and picks up Vendor by
                                        header (`purchase_authorization_sheet._read_approved_sheet`).
@@ -775,14 +778,15 @@ def _build_item_requirement_sheet(wb, mr_rows):
 
         Shortage = MAX(0, Qty As Per BOM − Qty In Stock − Projected Incoming from
                           Open WO − Incoming Purchase (Ordered Qty)
-                          + Reserved against Open WO)
+                          + Reserved against Open WO + Safety Stock)
 
     Reserved against Open WO and Projected Incoming from Open WO are fetched from
-    open Work Orders (see the two _*_open_wo_map helpers); everything else comes
-    off the Material Request Plan Items. This is the default item-requirement view
-    (it replaced the former separate "BOM Levels" + "logic" pair once the logic was
-    validated). Only the Shortage column is a live formula, so the two fetched
-    columns can be reviewed/overridden by hand."""
+    open Work Orders (see the two _*_open_wo_map helpers); Safety Stock is
+    Item.safety_stock; everything else comes off the Material Request Plan Items.
+    This is the default item-requirement view (it replaced the former separate
+    "BOM Levels" + "logic" pair once the logic was validated). Only the Shortage
+    column is a live formula, so the fetched columns (incl. Safety Stock) can be
+    reviewed/overridden by hand."""
     ws = wb.create_sheet(ITEM_REQUIREMENT_SHEET)
     headers = [
         "Item Code",                        # A
@@ -795,6 +799,7 @@ def _build_item_requirement_sheet(wb, mr_rows):
         "Incoming Purchase (Ordered Qty)",  # H
         "Shortage",                         # I  (formula)
         "Inventory Rate",                   # J  (STOCK_WAREHOUSE valuation rate — same as sheet 2 col G)
+        "Safety Stock",                     # K  (Item.safety_stock, added to the Shortage)
     ]
     _write_header(ws, headers)
 
@@ -806,6 +811,7 @@ def _build_item_requirement_sheet(wb, mr_rows):
     po_pending = _pending_po_map(item_codes)                        # H: outstanding PO qty
     reserved_wo = _reserved_against_open_wo_map(item_codes)         # F
     incoming_wo = _projected_incoming_from_open_wo_map(item_codes)  # G
+    safety = _safety_stock_map(item_codes)                          # K
     # J "Inventory Rate" uses the same source as sheet 2 col G: the STOCK_WAREHOUSE
     # Bin valuation rate (get_stock_map), so the two sheets never disagree on rate.
     stock_map = get_stock_map(item_codes)
@@ -821,10 +827,12 @@ def _build_item_requirement_sheet(wb, mr_rows):
         ws.cell(r, 6, flt(reserved_wo.get(item)))
         ws.cell(r, 7, flt(incoming_wo.get(item)))
         ws.cell(r, 8, flt(po_pending.get(item)))         # Incoming Purchase (Ordered Qty)
-        # I "Shortage" = MAX(0, QtyAsPerBOM − QtyInStock − ProjectedIncoming − Ordered + Reserved)
-        ws.cell(r, 9, "=MAX(0,(D{r}-E{r}-G{r}-H{r}+F{r}))".format(r=r))
+        # I "Shortage" = MAX(0, QtyAsPerBOM − QtyInStock − ProjectedIncoming − Ordered
+        #                       + Reserved + SafetyStock)
+        ws.cell(r, 9, "=MAX(0,(D{r}-E{r}-G{r}-H{r}+F{r}+K{r}))".format(r=r))
         # Inventory Rate = STOCK_WAREHOUSE Bin valuation rate (same as sheet 2 col G)
         ws.cell(r, 10, flt((stock_map.get(item) or frappe._dict()).get("valuation_rate")))
+        ws.cell(r, 11, flt(safety.get(item)))
         r += 1
 
     # TOTAL row: SUMPRODUCT(Qty As Per BOM, Inventory Rate) at the foot of column D =
@@ -877,48 +885,56 @@ def _build_unique_item_requirement_sheet(wb, mr_rows):
 
 def _build_approved_for_purchase_sheet(wb, mr_rows):
     """Buy-list derived from the Item Requirement shortage, aggregated ONCE per
-    purchasable item. A manual Buffer column lets the buyer top up each line;
-    Total Qty = Short Qty + Buffer is what the PAS purchases.
+    purchasable item. The Buffer column defaults to the Safety Stock top-up (the
+    extra qty needed to keep the item at its Item.safety_stock after this plan)
+    and stays editable; Total Qty = Short Qty + Buffer is what the PAS purchases.
 
     Column A = Item; the PAS reader takes the purchase qty as Short Qty + Buffer
     (it sums those two static columns, so it is robust to Excel not caching the
     Total Qty formula), and picks up Vendor by its header."""
     ws = wb.create_sheet(APPROVED_SHEET)
     headers = [
-        "Item",       # A  ← PAS reads item_code
-        "Short Qty",  # B  ← PAS reads (Short Qty + Buffer) as the purchase qty
-        "Buffer",     # C  ← manual top-up, 0 by default
-        "Total Qty",  # D  (formula: Short Qty + Buffer)
-        "UOM",        # E
-        "Rate",       # F
-        "Value",      # G  (formula: Rate × Total Qty)
-        "Vendor",     # H  ← PAS picks this up by header
-        "Lead Time",  # I
+        "Item",          # A  ← PAS reads item_code
+        "Short Qty",     # B  ← PAS reads (Short Qty + Buffer) as the purchase qty
+        "Buffer",        # C  ← Safety Stock top-up by default; editable
+        "Total Qty",     # D  (formula: Short Qty + Buffer)
+        "UOM",           # E
+        "Rate",          # F
+        "Value",         # G  (formula: Rate × Total Qty)
+        "Vendor",        # H  ← PAS picks this up by header
+        "Lead Time",     # I
+        "Safety Stock",  # J  (Item.safety_stock, for reference)
     ]
     _write_header(ws, headers)
 
     short_by_item = _purchase_shortage_by_item(mr_rows)
-    purchase_items = sorted(k for k, v in short_by_item.items() if v > 0)
+    with_safety = _purchase_shortage_by_item(mr_rows, include_safety_stock=True)
+    purchase_items = sorted(k for k, v in with_safety.items() if v > 0)
     if not purchase_items:
         _autosize(ws, headers)
         return None
 
     info = _item_info_map(purchase_items)
     vendors = _default_supplier_map(purchase_items)
+    safety = _safety_stock_map(purchase_items)
 
     r = 2
     first = r
     for item in purchase_items:
         it = info.get(item) or frappe._dict()
+        short = flt(short_by_item.get(item))
         ws.cell(r, 1, item)
-        ws.cell(r, 2, flt(short_by_item.get(item)))
-        ws.cell(r, 3, 0)  # Buffer - manual, defaults to 0
+        ws.cell(r, 2, short)
+        # Buffer = Safety Stock top-up: what's needed on top of the plan shortage
+        # to end at the item's safety stock. Static, so the PAS reads it as is.
+        ws.cell(r, 3, max(0.0, flt(with_safety.get(item)) - short))
         ws.cell(r, 4, "=B{r}+C{r}".format(r=r))  # Total Qty = Short Qty + Buffer
         ws.cell(r, 5, it.get("stock_uom"))
         ws.cell(r, 6, _purchase_rate(it))  # last purchase (incoming) rate
         ws.cell(r, 7, "=F{r}*D{r}".format(r=r))  # Value = Rate × Total Qty
         ws.cell(r, 8, vendors.get(item))
         ws.cell(r, 9, cint(it.get("lead_time_days")))
+        ws.cell(r, 10, flt(safety.get(item)))
         r += 1
 
     # TOTAL row - the PAS reader skips a row whose column A is "Total".
@@ -928,6 +944,7 @@ def _build_approved_for_purchase_sheet(wb, mr_rows):
         total_row = _bold_cells(ws, r, {
             1: _("Total"),
             2: "=SUM(B{a}:B{b})".format(a=first, b=last),
+            3: "=SUM(C{a}:C{b})".format(a=first, b=last),
             4: "=SUM(D{a}:D{b})".format(a=first, b=last),
             7: "=SUM(G{a}:G{b})".format(a=first, b=last),
         })
@@ -935,16 +952,18 @@ def _build_approved_for_purchase_sheet(wb, mr_rows):
     return total_row
 
 
-def _purchase_shortage_by_item(mr_rows):
+def _purchase_shortage_by_item(mr_rows, include_safety_stock=False):
     """{item_code: shortage} for purchasable items, matching the Item Requirement
     sheet's Shortage aggregated once per item:
 
         Shortage = max(0, Σ Qty As Per BOM − Qty In Stock − Projected Incoming from
-                          Open WO − Ordered Qty + Reserved against Open WO)
+                          Open WO − Ordered Qty + Reserved against Open WO
+                          [+ Safety Stock])
 
     Qty As Per BOM is summed across the item's Purchase rows (all levels); stock,
-    open-WO supply/reservation and pending POs are per-item constants applied once,
-    so an item recurring across levels is not double-netted."""
+    open-WO supply/reservation, pending POs and safety stock are per-item
+    constants applied once, so an item recurring across levels is not
+    double-netted."""
     purchase_items = sorted({r["item_code"] for r in mr_rows if r.get("material_request_type") == "Purchase"})
     if not purchase_items:
         return {}
@@ -961,6 +980,7 @@ def _purchase_shortage_by_item(mr_rows):
     po_pending = _pending_po_map(purchase_items)
     reserved_wo = _reserved_against_open_wo_map(purchase_items)
     incoming_wo = _projected_incoming_from_open_wo_map(purchase_items)
+    safety = _safety_stock_map(purchase_items) if include_safety_stock else {}
 
     out = {}
     for item in purchase_items:
@@ -970,7 +990,8 @@ def _purchase_shortage_by_item(mr_rows):
             - flt(actual.get(item))
             - flt(incoming_wo.get(item))
             - flt(po_pending.get(item))
-            + flt(reserved_wo.get(item)),
+            + flt(reserved_wo.get(item))
+            + flt(safety.get(item)),
         )
     return out
 
@@ -990,8 +1011,8 @@ def _build_chase_list_sheet(wb, mr_rows):
     Per purchasable item in the plan chain (same basis as Approved for Purchase):
         Short Without PO = max(0, Σ Qty As Per BOM − Qty In Stock
                                   − Projected Incoming from Open WO
-                                  + Reserved against Open WO)
-    i.e. what stock alone can't cover. That shortfall is allocated to the item's
+                                  + Reserved against Open WO + Safety Stock)
+    i.e. what stock alone can't cover while keeping the item at its safety stock. That shortfall is allocated to the item's
     open PO lines in Expected Date order; a line is listed only when part of its
     pending qty is needed ("Needed from PO" > 0). Status flags overdue (red) and
     due within CHASE_DUE_SOON_DAYS (amber) lines; sorted by Expected Date.
@@ -1005,14 +1026,15 @@ def _build_chase_list_sheet(wb, mr_rows):
         "Item Name",         # B
         "Plan Requirement",  # C  (Σ Qty As Per BOM across the chain)
         "Qty In Stock",      # D
-        "Short Without PO",  # E
-        "Purchase Order",    # F  (hyperlink)
-        "Supplier",          # G
-        "PO Date",           # H
-        "Expected Date",     # I
-        "Pending on PO",     # J
-        "Needed from PO",    # K
-        "Status",            # L
+        "Safety Stock",      # E
+        "Short Without PO",  # F
+        "Purchase Order",    # G  (hyperlink)
+        "Supplier",          # H
+        "PO Date",           # I
+        "Expected Date",     # J
+        "Pending on PO",     # K
+        "Needed from PO",    # L
+        "Status",            # M
     ]
     _write_header(ws, headers)
 
@@ -1033,17 +1055,18 @@ def _build_chase_list_sheet(wb, mr_rows):
         ws.cell(r, 2, ln["item_name"])
         ws.cell(r, 3, ln["required"])
         ws.cell(r, 4, ln["actual"])
-        ws.cell(r, 5, ln["short"])
-        c = ws.cell(r, 6, ln["po"])
+        ws.cell(r, 5, ln["safety"])
+        ws.cell(r, 6, ln["short"])
+        c = ws.cell(r, 7, ln["po"])
         c.hyperlink = get_url_to_form("Purchase Order", ln["po"])
         c.font = link_font
-        ws.cell(r, 7, ln["supplier"])
+        ws.cell(r, 8, ln["supplier"])
         if ln["po_date"]:
-            ws.cell(r, 8, getdate(ln["po_date"])).number_format = "DD-MM-YYYY"
+            ws.cell(r, 9, getdate(ln["po_date"])).number_format = "DD-MM-YYYY"
         status, fill = _("No expected date"), amber
         if ln["expected"]:
             expected = getdate(ln["expected"])
-            ws.cell(r, 9, expected).number_format = "DD-MM-YYYY"
+            ws.cell(r, 10, expected).number_format = "DD-MM-YYYY"
             days = (expected - today).days
             if days < 0:
                 status, fill = _("Overdue by {0} day(s)").format(-days), red
@@ -1052,23 +1075,23 @@ def _build_chase_list_sheet(wb, mr_rows):
             else:
                 status = _("Due in {0} day(s)").format(days)
                 fill = amber if days <= CHASE_DUE_SOON_DAYS else None
-        ws.cell(r, 10, ln["pending"])
-        ws.cell(r, 11, ln["needed"])
-        sc = ws.cell(r, 12, status)
+        ws.cell(r, 11, ln["pending"])
+        ws.cell(r, 12, ln["needed"])
+        sc = ws.cell(r, 13, status)
         if fill:
             sc.fill = fill
         r += 1
 
-    _bold_cells(ws, r, {1: _("TOTAL"), 11: "=SUM(K2:K{0})".format(r - 1)})
-    for col, width in zip("ABCDEFGHIJKL", (18, 30, 16, 13, 16, 20, 26, 12, 13, 14, 15, 20)):
+    _bold_cells(ws, r, {1: _("TOTAL"), 12: "=SUM(L2:L{0})".format(r - 1)})
+    for col, width in zip("ABCDEFGHIJKLM", (18, 30, 16, 13, 13, 16, 20, 26, 12, 13, 14, 15, 20)):
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "A2"
     return len(lines)
 
 
 def _chase_lines(mr_rows):
-    """[{item_code, item_name, required, actual, short, po, supplier, po_date,
-    expected, pending, needed}] - one per open PO line production is waiting on,
+    """[{item_code, item_name, required, actual, safety, short, po, supplier,
+    po_date, expected, pending, needed}] - one per open PO line production is waiting on,
     sorted by Expected Date (undated last). See _build_chase_list_sheet."""
     purchase_items = sorted({r["item_code"] for r in mr_rows if r.get("material_request_type") == "Purchase"})
     if not purchase_items:
@@ -1084,9 +1107,16 @@ def _chase_lines(mr_rows):
 
     reserved_wo = _reserved_against_open_wo_map(purchase_items)
     incoming_wo = _projected_incoming_from_open_wo_map(purchase_items)
+    safety = _safety_stock_map(purchase_items)
     short = {}
     for item in purchase_items:
-        s = flt(required.get(item)) - flt(actual.get(item)) - flt(incoming_wo.get(item)) + flt(reserved_wo.get(item))
+        s = (
+            flt(required.get(item))
+            - flt(actual.get(item))
+            - flt(incoming_wo.get(item))
+            + flt(reserved_wo.get(item))
+            + flt(safety.get(item))
+        )
         if s > 0:
             short[item] = s
     if not short:
@@ -1123,6 +1153,7 @@ def _chase_lines(mr_rows):
             "item_name": (info.get(p.item_code) or {}).get("item_name"),
             "required": flt(required.get(p.item_code)),
             "actual": flt(actual.get(p.item_code)),
+            "safety": flt(safety.get(p.item_code)),
             "short": short[p.item_code],
             "po": p.po,
             "supplier": p.supplier,
@@ -1334,6 +1365,20 @@ def _plan_committed_by_item(plan_name):
     ):
         out[row.item_code] = out.get(row.item_code, 0.0) + flt(row.planned_qty)
     return out
+
+
+def _safety_stock_map(items):
+    """{item_code: Item.safety_stock} for items that have one."""
+    if not items:
+        return {}
+    return {
+        r.name: flt(r.safety_stock)
+        for r in frappe.get_all(
+            "Item",
+            filters={"name": ["in", items], "safety_stock": [">", 0]},
+            fields=["name", "safety_stock"],
+        )
+    }
 
 
 def _item_info_map(items):

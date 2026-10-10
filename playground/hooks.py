@@ -248,3 +248,10 @@ after_migrate = [
 	# RFQ Intake: create the "Email Intake" custom fields on Opportunity (idempotent).
 	"playground.playground.rfq_intake.setup.setup_rfq_intake",
 ]
+
+# WA-AKG WhatsApp integration: Log Settings prunes WhatsApp Query Log rows older
+# than 90 days (adjustable in Log Settings). The endpoint itself is
+# playground.api.whatsapp.handle_message - see playground/playground/whatsapp/README.md.
+default_log_clearing_doctypes = {
+	"WhatsApp Query Log": 90,
+}

@@ -1,0 +1,38 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Query Log",
+ "module": "Playground",
+ "custom": 0,
+ "engine": "InnoDB",
+ "autoname": "hash",
+ "in_create": 1,
+ "sort_field": "timestamp",
+ "sort_order": "DESC",
+ "title_field": "phone",
+ "description": "One row per request WA-AKG sends to playground.api.whatsapp.handle_message, for debugging the integration. Never contains the shared secret.",
+ "field_order": [
+  "timestamp", "status", "intent", "column_break_hdr", "phone", "erpnext_user", "session_id", "remote_ip",
+  "message_section", "incoming_message", "response",
+  "error_section", "error_message"
+ ],
+ "fields": [
+  {"fieldname": "timestamp", "fieldtype": "Datetime", "label": "Timestamp", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "status", "fieldtype": "Select", "options": "Received\nProcessed\nError\nUnauthorized", "label": "Status", "in_list_view": 1, "in_standard_filter": 1, "read_only": 1},
+  {"fieldname": "intent", "fieldtype": "Data", "label": "Intent", "in_list_view": 1, "in_standard_filter": 1, "read_only": 1},
+  {"fieldname": "column_break_hdr", "fieldtype": "Column Break"},
+  {"fieldname": "phone", "fieldtype": "Data", "label": "Phone", "in_list_view": 1, "in_standard_filter": 1, "read_only": 1},
+  {"fieldname": "erpnext_user", "fieldtype": "Link", "options": "User", "label": "ERPNext User", "in_standard_filter": 1, "read_only": 1},
+  {"fieldname": "session_id", "fieldtype": "Data", "label": "Session ID", "read_only": 1},
+  {"fieldname": "remote_ip", "fieldtype": "Data", "label": "Remote IP", "read_only": 1},
+
+  {"fieldname": "message_section", "fieldtype": "Section Break", "label": "Message"},
+  {"fieldname": "incoming_message", "fieldtype": "Small Text", "label": "Incoming Message", "read_only": 1},
+  {"fieldname": "response", "fieldtype": "Small Text", "label": "Response", "read_only": 1},
+
+  {"fieldname": "error_section", "fieldtype": "Section Break", "label": "Error", "depends_on": "eval:doc.error_message"},
+  {"fieldname": "error_message", "fieldtype": "Small Text", "label": "Error Message", "read_only": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "delete": 1, "report": 1, "export": 1}
+ ]
+}

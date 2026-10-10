@@ -26,7 +26,10 @@ are in-cell formulas so the workbook stays live when edited):
      "Summary"                      - headline figures as live formulas on the
                                        other sheets' TOTAL rows: Pending Dispatches
                                        (sheet 1 cols E / M), Suggested Prodn (sheet 2
-                                       cols E / H), Purchase Budget (sheet 5 col G).
+                                       cols E / H), Purchase Budget (sheet 5 col G);
+                                       then one row per Sales Order: Customer,
+                                       Dispatch Priority, Pending Value, Suggested
+                                       Prodn, Material / Sales Status.
   1. "FG Reservation Status"        - the FGSRM picture per open SO line: Pending,
                                        Reserved, Short to Complete (=Pending−Reserved,
                                        formula), Item Free Stock, Suggested Prodn,
@@ -166,7 +169,7 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None, s
     purchase_total = _build_approved_for_purchase_sheet(wb, mr_rows)
     _build_action_items_sheet(wb, actions)
     # Built last (it points at the other sheets' TOTAL rows), placed after Cover.
-    _build_summary_sheet(wb, fg_total, prodn_total, purchase_total)
+    _build_summary_sheet(wb, fg_total, prodn_total, purchase_total, lines)
 
     stream = BytesIO()
     wb.save(stream)
@@ -334,9 +337,10 @@ def _humanize_filters(filters):
 SUMMARY_SHEET = "Summary"
 
 
-def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total):
+def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total, lines):
     """Headline figures, each a live formula on another sheet's TOTAL row so it
-    stays in step when those sheets are edited:
+    stays in step when those sheets are edited, followed by a per-Sales-Order list
+    built from the demand `lines` (see _write_sales_order_list):
 
       Pending Dispatches - Count = FG Reservation Status col E (Pending Qty),
                            Value = col M (Pending Dispatch Value)
@@ -382,11 +386,85 @@ def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total):
         if count is not None:
             ws.cell(r, 2, count).number_format = "#,##0.##"
         ws.cell(r, 3, value).number_format = "#,##0.00"
-        ws.cell(r, 4, source)
+        ws.cell(r, 4, source)  # long text overflows into the empty cells beside it
         r += 1
 
-    for col, width in zip("ABCD", (22, 14, 18, 62)):
+    _write_sales_order_list(ws, r + 2, lines)
+
+    for col, width in zip("ABCDEFG", (22, 32, 18, 18, 16, 22, 22)):
         ws.column_dimensions[col].width = width
+
+
+def _write_sales_order_list(ws, start_row, lines):
+    """The Summary's per-Sales-Order list, from `start_row`: one row per SO in the
+    demand lines (manual / buffer lines carry no SO and are left out), in Dispatch
+    Priority order, with Pending Value and Suggested Prodn summed over its lines
+    and a TOTAL row. The SO cell links to the Sales Order form."""
+    from openpyxl.styles import Font
+
+    by_so = {}
+    for line in lines:
+        so = line.get("sales_order")
+        if not so:
+            continue
+        agg = by_so.get(so)
+        if agg is None:
+            agg = by_so[so] = {
+                "customer": line.get("customer"),
+                "so_date": line.get("so_date"),
+                "material_status": line.get("material_status"),
+                "sales_status": line.get("sales_status"),
+                "pending_value": 0.0,
+                "suggested_prodn": 0.0,
+            }
+        agg["pending_value"] += flt(line.get("pending_value"))
+        agg["suggested_prodn"] += flt(line.get("suggested_prodn"))
+
+    ws.cell(start_row, 1, _("Sales Orders")).font = Font(bold=True, size=12)
+    headers = [
+        "Sales Order",        # A
+        "Customer",           # B
+        "Dispatch Priority",  # C
+        "Pending Value",      # D
+        "Suggested Prodn",    # E
+        "Material Status",    # F
+        "Sales Status",       # G
+    ]
+    header_row = start_row + 1
+    _write_header(ws, headers, row=header_row)
+
+    if not by_so:
+        ws.cell(header_row + 1, 1, _("(no Sales Orders in this view)"))
+        return
+
+    link_font = Font(color="0563C1", underline="single")
+    order = sorted(
+        by_so,
+        key=lambda so: (getdate(by_so[so]["so_date"]) if by_so[so]["so_date"] else getdate("9999-12-31"), so),
+    )
+    r = header_row + 1
+    for so in order:
+        agg = by_so[so]
+        c = ws.cell(r, 1, so)
+        c.hyperlink = get_url_to_form("Sales Order", so)
+        c.font = link_font
+        ws.cell(r, 2, agg["customer"])
+        if agg["so_date"]:
+            ws.cell(r, 3, getdate(agg["so_date"])).number_format = "DD-MM-YYYY"
+        ws.cell(r, 4, agg["pending_value"]).number_format = "#,##0.00"
+        ws.cell(r, 5, agg["suggested_prodn"]).number_format = "#,##0.##"
+        ws.cell(r, 6, agg["material_status"])
+        ws.cell(r, 7, agg["sales_status"])
+        r += 1
+
+    first, last = header_row + 1, r - 1
+    _bold_cells(ws, r, {
+        1: _("TOTAL"),
+        4: "=SUM(D{0}:D{1})".format(first, last),
+        5: "=SUM(E{0}:E{1})".format(first, last),
+    })
+    ws.cell(r, 4).number_format = "#,##0.00"
+    ws.cell(r, 5).number_format = "#,##0.##"
 
 
 # --------------------------------------------------------------------------- #

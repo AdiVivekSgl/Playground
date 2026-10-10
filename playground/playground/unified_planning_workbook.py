@@ -62,6 +62,11 @@ are in-cell formulas so the workbook stays live when edited):
                                        A = Item; the PAS reader takes the purchase qty
                                        as Short Qty + Buffer and picks up Vendor by
                                        header (`purchase_authorization_sheet._read_approved_sheet`).
+  5b. "Chase List"                  - open Purchase Order lines the plan is waiting
+                                       on: purchased materials stock alone can't
+                                       cover, with the shortfall allocated to their
+                                       open PO lines by Expected Date; overdue (red)
+                                       and due-soon (amber) flagged.
   6. "Action Items"                 - plan readiness (plan_readiness.py): every
                                        missing BOM / disabled item / missing rate
                                        or supplier, its BOM path, the FGs it
@@ -167,6 +172,7 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None, s
     _build_item_requirement_sheet(wb, mr_rows)
     _build_unique_item_requirement_sheet(wb, mr_rows)
     purchase_total = _build_approved_for_purchase_sheet(wb, mr_rows)
+    _build_chase_list_sheet(wb, mr_rows)
     _build_action_items_sheet(wb, actions)
     # Built last (it points at the other sheets' TOTAL rows), placed after Cover.
     _build_summary_sheet(wb, fg_total, prodn_total, purchase_total, lines)
@@ -301,7 +307,8 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
         _("3. Consolidated Requirement"),
         _("4. Item Requirement"),
         _("5. Approved for Purchase"),
-        _("6. Action Items"),
+        _("6. Chase List"),
+        _("7. Action Items"),
     ):
         ws.cell(r, 1, name); r += 1
 
@@ -965,6 +972,165 @@ def _purchase_shortage_by_item(mr_rows):
             - flt(po_pending.get(item))
             + flt(reserved_wo.get(item)),
         )
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Sheet 5b - Chase List  [open POs the plan is waiting on]
+# --------------------------------------------------------------------------- #
+
+CHASE_SHEET = "Chase List"
+CHASE_DUE_SOON_DAYS = 7  # amber when the expected date is this close
+
+
+def _build_chase_list_sheet(wb, mr_rows):
+    """Purchased materials that have been ordered but not yet received AND that
+    production is waiting on - the POs to chase.
+
+    Per purchasable item in the plan chain (same basis as Approved for Purchase):
+        Short Without PO = max(0, Σ Qty As Per BOM − Qty In Stock
+                                  − Projected Incoming from Open WO
+                                  + Reserved against Open WO)
+    i.e. what stock alone can't cover. That shortfall is allocated to the item's
+    open PO lines in Expected Date order; a line is listed only when part of its
+    pending qty is needed ("Needed from PO" > 0). Status flags overdue (red) and
+    due within CHASE_DUE_SOON_DAYS (amber) lines; sorted by Expected Date.
+
+    Returns the number of PO lines listed."""
+    from openpyxl.styles import Font, PatternFill
+
+    ws = wb.create_sheet(CHASE_SHEET)
+    headers = [
+        "Item Code",         # A
+        "Item Name",         # B
+        "Plan Requirement",  # C  (Σ Qty As Per BOM across the chain)
+        "Qty In Stock",      # D
+        "Short Without PO",  # E
+        "Purchase Order",    # F  (hyperlink)
+        "Supplier",          # G
+        "PO Date",           # H
+        "Expected Date",     # I
+        "Pending on PO",     # J
+        "Needed from PO",    # K
+        "Status",            # L
+    ]
+    _write_header(ws, headers)
+
+    lines = _chase_lines(mr_rows)
+    if not lines:
+        ws.cell(2, 1, _("Nothing to chase — no purchased material in this plan is waiting on an open Purchase Order."))
+        _autosize(ws, headers)
+        return 0
+
+    today = getdate()
+    link_font = Font(color="0563C1", underline="single")
+    red = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    amber = PatternFill(fill_type="solid", fgColor="FFEB9C")
+
+    r = 2
+    for ln in lines:
+        ws.cell(r, 1, ln["item_code"])
+        ws.cell(r, 2, ln["item_name"])
+        ws.cell(r, 3, ln["required"])
+        ws.cell(r, 4, ln["actual"])
+        ws.cell(r, 5, ln["short"])
+        c = ws.cell(r, 6, ln["po"])
+        c.hyperlink = get_url_to_form("Purchase Order", ln["po"])
+        c.font = link_font
+        ws.cell(r, 7, ln["supplier"])
+        if ln["po_date"]:
+            ws.cell(r, 8, getdate(ln["po_date"])).number_format = "DD-MM-YYYY"
+        status, fill = _("No expected date"), amber
+        if ln["expected"]:
+            expected = getdate(ln["expected"])
+            ws.cell(r, 9, expected).number_format = "DD-MM-YYYY"
+            days = (expected - today).days
+            if days < 0:
+                status, fill = _("Overdue by {0} day(s)").format(-days), red
+            elif days == 0:
+                status, fill = _("Due today"), amber
+            else:
+                status = _("Due in {0} day(s)").format(days)
+                fill = amber if days <= CHASE_DUE_SOON_DAYS else None
+        ws.cell(r, 10, ln["pending"])
+        ws.cell(r, 11, ln["needed"])
+        sc = ws.cell(r, 12, status)
+        if fill:
+            sc.fill = fill
+        r += 1
+
+    _bold_cells(ws, r, {1: _("TOTAL"), 11: "=SUM(K2:K{0})".format(r - 1)})
+    for col, width in zip("ABCDEFGHIJKL", (18, 30, 16, 13, 16, 20, 26, 12, 13, 14, 15, 20)):
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = "A2"
+    return len(lines)
+
+
+def _chase_lines(mr_rows):
+    """[{item_code, item_name, required, actual, short, po, supplier, po_date,
+    expected, pending, needed}] - one per open PO line production is waiting on,
+    sorted by Expected Date (undated last). See _build_chase_list_sheet."""
+    purchase_items = sorted({r["item_code"] for r in mr_rows if r.get("material_request_type") == "Purchase"})
+    if not purchase_items:
+        return []
+
+    required, actual = {}, {}
+    for row in mr_rows:
+        if row.get("material_request_type") != "Purchase":
+            continue
+        item = row["item_code"]
+        required[item] = required.get(item, 0.0) + flt(row.get("required_bom_qty"))
+        actual[item] = flt(row.get("actual_qty"))  # per-item constant
+
+    reserved_wo = _reserved_against_open_wo_map(purchase_items)
+    incoming_wo = _projected_incoming_from_open_wo_map(purchase_items)
+    short = {}
+    for item in purchase_items:
+        s = flt(required.get(item)) - flt(actual.get(item)) - flt(incoming_wo.get(item)) + flt(reserved_wo.get(item))
+        if s > 0:
+            short[item] = s
+    if not short:
+        return []
+
+    po_lines = frappe.db.sql(
+        """
+        SELECT poi.item_code, poi.parent AS po, po.supplier, po.transaction_date AS po_date,
+            COALESCE(poi.schedule_date, po.schedule_date) AS expected,
+            GREATEST(poi.qty - IFNULL(poi.received_qty, 0), 0) AS pending
+        FROM `tabPurchase Order Item` poi
+        INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+        WHERE poi.item_code IN %(items)s
+            AND po.docstatus = 1
+            AND po.status NOT IN ('Closed', 'Cancelled', 'Completed')
+            AND poi.qty > IFNULL(poi.received_qty, 0)
+        ORDER BY (COALESCE(poi.schedule_date, po.schedule_date) IS NULL),
+            COALESCE(poi.schedule_date, po.schedule_date), po.transaction_date, poi.parent, poi.idx
+        """,
+        {"items": sorted(short)},
+        as_dict=True,
+    )
+    info = _item_info_map(sorted(short))
+
+    out = []
+    left = dict(short)
+    for p in po_lines:
+        need = min(flt(p.pending), left.get(p.item_code, 0.0))
+        if need <= 0:
+            continue
+        left[p.item_code] -= need
+        out.append({
+            "item_code": p.item_code,
+            "item_name": (info.get(p.item_code) or {}).get("item_name"),
+            "required": flt(required.get(p.item_code)),
+            "actual": flt(actual.get(p.item_code)),
+            "short": short[p.item_code],
+            "po": p.po,
+            "supplier": p.supplier,
+            "po_date": p.po_date,
+            "expected": p.expected,
+            "pending": flt(p.pending),
+            "needed": need,
+        })
     return out
 
 

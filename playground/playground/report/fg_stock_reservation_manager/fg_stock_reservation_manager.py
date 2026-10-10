@@ -872,23 +872,61 @@ def _suggested_prodn_by_item(filters):
 
 
 @frappe.whitelist()
-def check_production_plan_readiness(filters=None, snapshot=None):
+def check_production_plan_readiness(filters=None, snapshot=None, selection=None):
 	"""Pre-flight for Create Prodn Plan: the readiness of every FG the plan would
-	carry (from the report's `filters`, or a Weekly Planning Snapshot's Committed
-	Prodn) - blockers and warnings with fix links, see plan_readiness.py. Nothing
-	is created."""
+	carry (from the report's `filters` - narrowed to the ticked rows when
+	`selection` is given - or a Weekly Planning Snapshot's Committed Prodn) -
+	blockers and warnings with fix links, see plan_readiness.py. Nothing is
+	created."""
 	if not frappe.has_permission("Production Plan", "create"):
 		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
-	prodn_by_item = _prodn_for(filters, snapshot)
+	prodn_by_item = _prodn_for(filters, snapshot, selection)
 	result = check_readiness(sorted(prodn_by_item))
 	result["items"] = len(prodn_by_item)
 	return result
 
 
-def _prodn_for(filters=None, snapshot=None):
+def parse_selection(selection):
+	"""The report rows ticked in the browser, as {"so_items", "sales_orders",
+	"manual"} sets - SO lines by Sales Order Item name, "Group by Sales Order"
+	summary rows by Sales Order, manual requirement rows by their name. None when
+	nothing is ticked (= the whole filtered view)."""
+	if not selection:
+		return None
+	sel = frappe.parse_json(selection) if isinstance(selection, str) else selection
+	out = {key: set(sel.get(key) or []) for key in ("so_items", "sales_orders", "manual")}
+	return out if any(out.values()) else None
+
+
+def selected_report_rows(filters, selection):
+	"""The report's per-line rows for `filters`, narrowed to the ticked rows in
+	`selection` (see parse_selection). Always run ungrouped so every SO line is
+	present; a ticked summary row selects all of its Sales Order's lines. Each
+	row keeps the Suggested Prodn the report showed for it (free stock allocated
+	date-wise across the whole view), so the plan matches what was ticked."""
+	sel = parse_selection(selection)
+	f = dict(filters or {})
+	f["group_by_so"] = 0
+	_columns, rows = execute(f)
+	rows = [r for r in rows if not r.get("is_total")]
+	if not sel:
+		return rows
+	return [
+		r
+		for r in rows
+		if (r.get("is_manual") and r.get("manual_name") in sel["manual"])
+		or (
+			not r.get("is_manual")
+			and (r.get("sales_order_item") in sel["so_items"] or r.get("sales_order") in sel["sales_orders"])
+		)
+	]
+
+
+def _prodn_for(filters=None, snapshot=None, selection=None):
 	"""{item_code: qty} the plan would be built from - a snapshot's itemwise
-	Committed Prodn, else the report's itemwise Suggested Prodn for `filters`.
-	Throws when there's nothing to produce."""
+	Committed Prodn; else, when rows are ticked (`selection`), the Suggested Prodn
+	of those rows summed per item; else the report's itemwise Suggested Prodn for
+	`filters`. Throws when there's nothing to produce."""
 	if snapshot:
 		if not frappe.has_permission("Weekly Planning Snapshot", "read", doc=snapshot):
 			frappe.throw(_("You are not permitted to read this Weekly Planning Snapshot."), frappe.PermissionError)
@@ -902,6 +940,16 @@ def _prodn_for(filters=None, snapshot=None):
 		return prodn_by_item
 
 	filters = frappe.parse_json(filters) if filters else {}
+	if parse_selection(selection):
+		prodn_by_item = {}
+		for r in selected_report_rows(filters, selection):
+			qty = flt(r.get("suggested_prodn"))
+			if qty > 0:
+				prodn_by_item[r["item_code"]] = prodn_by_item.get(r["item_code"], 0.0) + qty
+		if not prodn_by_item:
+			frappe.throw(_("Nothing to produce — the ticked rows have no Suggested Prodn."))
+		return prodn_by_item
+
 	prodn_by_item = _suggested_prodn_by_item(filters)
 	if not prodn_by_item:
 		frappe.throw(_("Nothing to produce — every item's Suggested Prodn is zero for this view."))
@@ -909,11 +957,12 @@ def _prodn_for(filters=None, snapshot=None):
 
 
 @frappe.whitelist()
-def create_production_plan_from_suggested_prodn(filters=None, exclude_mode=None):
+def create_production_plan_from_suggested_prodn(filters=None, exclude_mode=None, selection=None):
 	"""Create a DRAFT Production Plan from the report's itemwise Suggested Prodn,
 	then populate the full nested sub-assembly chain and the raw materials for
 	purchase, and save it (never auto-submitted). Recomputed server-side from
-	`filters` so it matches the report.
+	`filters` so it matches the report; when rows are ticked (`selection`, see
+	parse_selection) only those rows' Suggested Prodn is planned.
 
 	Integrates with the site's custom Production Plan subsystem (separate app)
 	rather than stock ERPNext routines, so the plan is created the way that app
@@ -940,7 +989,7 @@ def create_production_plan_from_suggested_prodn(filters=None, exclude_mode=None)
 	a plan that app's hierarchy/Excel features don't recognise."""
 	if not frappe.has_permission("Production Plan", "create"):
 		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
-	return _build_production_plan(_prodn_for(filters=filters), exclude_mode)
+	return _build_production_plan(_prodn_for(filters=filters, selection=selection), exclude_mode)
 
 
 @frappe.whitelist()

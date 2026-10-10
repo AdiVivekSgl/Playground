@@ -26,6 +26,7 @@ const PR_METHOD_PATH =
 //   build_method: create_production_plan_from_suggested_prodn / _from_snapshot
 //   build_args:   args for build_method
 //   confirm_text: confirmation shown when the check is clean
+//   scope_label:  optional line at the top of the dialog (e.g. "Only the 5 ticked rows")
 //   download(plan_name_or_null): downloads the unified workbook
 // }
 playground.plan_readiness.run = function (opts) {
@@ -85,6 +86,7 @@ function pr_dialog(opts, res) {
 		},
 		"btn-default"
 	);
+	d.pr_scope = opts.scope_label;
 	pr_render(d, res);
 	d.show();
 }
@@ -130,7 +132,8 @@ function pr_render(d, res) {
 				.join("")}</tbody>
 		</table>`;
 
-	let html = `<p>${__("{0} finished good(s) to plan.", [res.items])} `;
+	let html = d.pr_scope ? `<p class="text-muted"><b>${esc(d.pr_scope)}</b></p>` : "";
+	html += `<p>${__("{0} finished good(s) to plan.", [res.items])} `;
 	if (blockers.length) {
 		html += `<span class="indicator-pill red">${__("{0} blocker(s)", [blockers.length])}</span> `;
 		html += __("affecting {0} finished good(s); {1} can't be planned at all.", [affected, unplannable]);

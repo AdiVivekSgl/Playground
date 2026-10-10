@@ -26,7 +26,10 @@ are in-cell formulas so the workbook stays live when edited):
      "Summary"                      - headline figures as live formulas on the
                                        other sheets' TOTAL rows: Pending Dispatches
                                        (sheet 1 cols E / M), Suggested Prodn (sheet 2
-                                       cols E / H), Purchase Budget (sheet 5 col G).
+                                       cols E / H), Purchase Budget (sheet 5 col G);
+                                       then one row per Sales Order: Customer,
+                                       Dispatch Priority, Pending Value, Suggested
+                                       Prodn, Material / Sales Status.
   1. "FG Reservation Status"        - the FGSRM picture per open SO line: Pending,
                                        Reserved, Short to Complete (=Pending−Reserved,
                                        formula), Item Free Stock, Suggested Prodn,
@@ -59,6 +62,11 @@ are in-cell formulas so the workbook stays live when edited):
                                        A = Item; the PAS reader takes the purchase qty
                                        as Short Qty + Buffer and picks up Vendor by
                                        header (`purchase_authorization_sheet._read_approved_sheet`).
+  5b. "Chase List"                  - open Purchase Order lines the plan is waiting
+                                       on: purchased materials stock alone can't
+                                       cover, with the shortfall allocated to their
+                                       open PO lines by Expected Date; overdue (red)
+                                       and due-soon (amber) flagged.
   6. "Action Items"                 - plan readiness (plan_readiness.py): every
                                        missing BOM / disabled item / missing rate
                                        or supplier, its BOM path, the FGs it
@@ -96,7 +104,8 @@ from frappe.utils import (
 )
 
 from playground.playground.report.fg_stock_reservation_manager.fg_stock_reservation_manager import (
-    execute as fgsrm_execute,
+    parse_selection,
+    selected_report_rows,
 )
 from playground.playground.report.production_requirement_report.production_requirement_report import (
     get_stock_map,
@@ -115,7 +124,7 @@ _HEADER_FILL = "D3D3D3"
 
 
 @frappe.whitelist()
-def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
+def download_unified_planning_workbook(plan=None, filters=None, snapshot=None, selection=None):
     """Stream the unified workbook for Production Plan `plan`: a Cover sheet
     followed by the planning sheets and an Action Items sheet.
 
@@ -147,7 +156,8 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # drop the default empty sheet
 
-    lines = _planning_lines(filters, snapshot)
+    selection = None if snapshot else parse_selection(selection)
+    lines = _planning_lines(filters, snapshot, selection)
     chain = _build_chain(plan) if plan else []
     committed_by_item = _plan_committed_by_item(plan) if plan else {}
     # The nested-chain Material Request Plan Items - shared by the Item Requirement
@@ -155,16 +165,17 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None):
     mr_rows = _collect_mr_rows(chain)
     actions = _action_items(plan, chain, lines, committed_by_item)
 
-    _build_cover_sheet(wb, plan, filters, snapshot, actions)
+    _build_cover_sheet(wb, plan, filters, snapshot, actions, selection)
     fg_total = _build_fg_status_sheet(wb, lines)
     prodn_total = _build_production_requirement_sheet(wb, lines)
     _build_consolidated_requirement_sheet(wb, lines, committed_by_item)
     _build_item_requirement_sheet(wb, mr_rows)
     _build_unique_item_requirement_sheet(wb, mr_rows)
     purchase_total = _build_approved_for_purchase_sheet(wb, mr_rows)
+    _build_chase_list_sheet(wb, mr_rows)
     _build_action_items_sheet(wb, actions)
     # Built last (it points at the other sheets' TOTAL rows), placed after Cover.
-    _build_summary_sheet(wb, fg_total, prodn_total, purchase_total)
+    _build_summary_sheet(wb, fg_total, prodn_total, purchase_total, lines)
 
     stream = BytesIO()
     wb.save(stream)
@@ -195,7 +206,7 @@ _FILTER_LABELS = {
 }
 
 
-def _build_cover_sheet(wb, plan, filters, snapshot, actions):
+def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
     """First sheet: the report title (which differs by origin), a hyperlinked
     reference to the origin document and the Production Plan, and a generated-on
     timestamp.
@@ -281,6 +292,9 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions):
                 _kv(r, label, value); r += 1
         else:
             ws.cell(r, 1, _("(none — full open-order view)")); r += 1
+        if selection:
+            ticked = sum(len(v) for v in selection.values())
+            _kv(r, _("Rows"), _("Only the {0} ticked row(s)").format(ticked)); r += 1
 
     # Contents index.
     r += 1
@@ -293,7 +307,8 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions):
         _("3. Consolidated Requirement"),
         _("4. Item Requirement"),
         _("5. Approved for Purchase"),
-        _("6. Action Items"),
+        _("6. Chase List"),
+        _("7. Action Items"),
     ):
         ws.cell(r, 1, name); r += 1
 
@@ -329,9 +344,10 @@ def _humanize_filters(filters):
 SUMMARY_SHEET = "Summary"
 
 
-def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total):
+def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total, lines):
     """Headline figures, each a live formula on another sheet's TOTAL row so it
-    stays in step when those sheets are edited:
+    stays in step when those sheets are edited, followed by a per-Sales-Order list
+    built from the demand `lines` (see _write_sales_order_list):
 
       Pending Dispatches - Count = FG Reservation Status col E (Pending Qty),
                            Value = col M (Pending Dispatch Value)
@@ -377,18 +393,92 @@ def _build_summary_sheet(wb, fg_total, prodn_total, purchase_total):
         if count is not None:
             ws.cell(r, 2, count).number_format = "#,##0.##"
         ws.cell(r, 3, value).number_format = "#,##0.00"
-        ws.cell(r, 4, source)
+        ws.cell(r, 4, source)  # long text overflows into the empty cells beside it
         r += 1
 
-    for col, width in zip("ABCD", (22, 14, 18, 62)):
+    _write_sales_order_list(ws, r + 2, lines)
+
+    for col, width in zip("ABCDEFG", (22, 32, 18, 18, 16, 22, 22)):
         ws.column_dimensions[col].width = width
+
+
+def _write_sales_order_list(ws, start_row, lines):
+    """The Summary's per-Sales-Order list, from `start_row`: one row per SO in the
+    demand lines (manual / buffer lines carry no SO and are left out), in Dispatch
+    Priority order, with Pending Value and Suggested Prodn summed over its lines
+    and a TOTAL row. The SO cell links to the Sales Order form."""
+    from openpyxl.styles import Font
+
+    by_so = {}
+    for line in lines:
+        so = line.get("sales_order")
+        if not so:
+            continue
+        agg = by_so.get(so)
+        if agg is None:
+            agg = by_so[so] = {
+                "customer": line.get("customer"),
+                "so_date": line.get("so_date"),
+                "material_status": line.get("material_status"),
+                "sales_status": line.get("sales_status"),
+                "pending_value": 0.0,
+                "suggested_prodn": 0.0,
+            }
+        agg["pending_value"] += flt(line.get("pending_value"))
+        agg["suggested_prodn"] += flt(line.get("suggested_prodn"))
+
+    ws.cell(start_row, 1, _("Sales Orders")).font = Font(bold=True, size=12)
+    headers = [
+        "Sales Order",        # A
+        "Customer",           # B
+        "Dispatch Priority",  # C
+        "Pending Value",      # D
+        "Suggested Prodn",    # E
+        "Material Status",    # F
+        "Sales Status",       # G
+    ]
+    header_row = start_row + 1
+    _write_header(ws, headers, row=header_row)
+
+    if not by_so:
+        ws.cell(header_row + 1, 1, _("(no Sales Orders in this view)"))
+        return
+
+    link_font = Font(color="0563C1", underline="single")
+    order = sorted(
+        by_so,
+        key=lambda so: (getdate(by_so[so]["so_date"]) if by_so[so]["so_date"] else getdate("9999-12-31"), so),
+    )
+    r = header_row + 1
+    for so in order:
+        agg = by_so[so]
+        c = ws.cell(r, 1, so)
+        c.hyperlink = get_url_to_form("Sales Order", so)
+        c.font = link_font
+        ws.cell(r, 2, agg["customer"])
+        if agg["so_date"]:
+            ws.cell(r, 3, getdate(agg["so_date"])).number_format = "DD-MM-YYYY"
+        ws.cell(r, 4, agg["pending_value"]).number_format = "#,##0.00"
+        ws.cell(r, 5, agg["suggested_prodn"]).number_format = "#,##0.##"
+        ws.cell(r, 6, agg["material_status"])
+        ws.cell(r, 7, agg["sales_status"])
+        r += 1
+
+    first, last = header_row + 1, r - 1
+    _bold_cells(ws, r, {
+        1: _("TOTAL"),
+        4: "=SUM(D{0}:D{1})".format(first, last),
+        5: "=SUM(E{0}:E{1})".format(first, last),
+    })
+    ws.cell(r, 4).number_format = "#,##0.00"
+    ws.cell(r, 5).number_format = "#,##0.##"
 
 
 # --------------------------------------------------------------------------- #
 # Shared line model for sheets 1 & 2
 # --------------------------------------------------------------------------- #
 
-def _planning_lines(filters, snapshot):
+def _planning_lines(filters, snapshot, selection=None):
     """Normalise the demand into one list of per-line dicts both sheet 1 and
     sheet 2 render from, so the two never drift.
 
@@ -398,8 +488,8 @@ def _planning_lines(filters, snapshot):
     reserved_by_customer, material_status, sales_status, source, is_buffer."""
     if snapshot:
         return _lines_from_snapshot(snapshot)
-    if filters:
-        return _lines_from_fgsrm(filters)
+    if filters or selection:
+        return _lines_from_fgsrm(filters, selection)
     return []
 
 
@@ -444,13 +534,14 @@ def _lines_from_snapshot(snapshot):
     return lines
 
 
-def _lines_from_fgsrm(filters):
-    """Per-line model from the live FGSRM report for `filters`. Committed Prodn
-    mirrors Suggested Prodn (the plan is built from Suggested); Valuation Rate is
-    enriched from STOCK_WAREHOUSE so sheet 2 can still value the commitment. The
-    report's own TOTAL row is dropped - each sheet appends its own."""
-    _columns, rows = fgsrm_execute(dict(filters or {}))
-    rows = [r for r in rows if not r.get("is_total")]
+def _lines_from_fgsrm(filters, selection=None):
+    """Per-line model from the live FGSRM report for `filters`, narrowed to the
+    ticked rows when `selection` is given (so the workbook covers exactly what
+    was planned). Committed Prodn mirrors Suggested Prodn (the plan is built from
+    Suggested); Valuation Rate is enriched from STOCK_WAREHOUSE so sheet 2 can
+    still value the commitment. Always per line (never the grouped-by-SO
+    summary) and without the report's TOTAL row - each sheet appends its own."""
+    rows = selected_report_rows(filters, selection)
 
     item_codes = sorted({r.get("item_code") for r in rows if r.get("item_code")})
     stock_map = get_stock_map(item_codes)
@@ -881,6 +972,165 @@ def _purchase_shortage_by_item(mr_rows):
             - flt(po_pending.get(item))
             + flt(reserved_wo.get(item)),
         )
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Sheet 5b - Chase List  [open POs the plan is waiting on]
+# --------------------------------------------------------------------------- #
+
+CHASE_SHEET = "Chase List"
+CHASE_DUE_SOON_DAYS = 7  # amber when the expected date is this close
+
+
+def _build_chase_list_sheet(wb, mr_rows):
+    """Purchased materials that have been ordered but not yet received AND that
+    production is waiting on - the POs to chase.
+
+    Per purchasable item in the plan chain (same basis as Approved for Purchase):
+        Short Without PO = max(0, Σ Qty As Per BOM − Qty In Stock
+                                  − Projected Incoming from Open WO
+                                  + Reserved against Open WO)
+    i.e. what stock alone can't cover. That shortfall is allocated to the item's
+    open PO lines in Expected Date order; a line is listed only when part of its
+    pending qty is needed ("Needed from PO" > 0). Status flags overdue (red) and
+    due within CHASE_DUE_SOON_DAYS (amber) lines; sorted by Expected Date.
+
+    Returns the number of PO lines listed."""
+    from openpyxl.styles import Font, PatternFill
+
+    ws = wb.create_sheet(CHASE_SHEET)
+    headers = [
+        "Item Code",         # A
+        "Item Name",         # B
+        "Plan Requirement",  # C  (Σ Qty As Per BOM across the chain)
+        "Qty In Stock",      # D
+        "Short Without PO",  # E
+        "Purchase Order",    # F  (hyperlink)
+        "Supplier",          # G
+        "PO Date",           # H
+        "Expected Date",     # I
+        "Pending on PO",     # J
+        "Needed from PO",    # K
+        "Status",            # L
+    ]
+    _write_header(ws, headers)
+
+    lines = _chase_lines(mr_rows)
+    if not lines:
+        ws.cell(2, 1, _("Nothing to chase — no purchased material in this plan is waiting on an open Purchase Order."))
+        _autosize(ws, headers)
+        return 0
+
+    today = getdate()
+    link_font = Font(color="0563C1", underline="single")
+    red = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    amber = PatternFill(fill_type="solid", fgColor="FFEB9C")
+
+    r = 2
+    for ln in lines:
+        ws.cell(r, 1, ln["item_code"])
+        ws.cell(r, 2, ln["item_name"])
+        ws.cell(r, 3, ln["required"])
+        ws.cell(r, 4, ln["actual"])
+        ws.cell(r, 5, ln["short"])
+        c = ws.cell(r, 6, ln["po"])
+        c.hyperlink = get_url_to_form("Purchase Order", ln["po"])
+        c.font = link_font
+        ws.cell(r, 7, ln["supplier"])
+        if ln["po_date"]:
+            ws.cell(r, 8, getdate(ln["po_date"])).number_format = "DD-MM-YYYY"
+        status, fill = _("No expected date"), amber
+        if ln["expected"]:
+            expected = getdate(ln["expected"])
+            ws.cell(r, 9, expected).number_format = "DD-MM-YYYY"
+            days = (expected - today).days
+            if days < 0:
+                status, fill = _("Overdue by {0} day(s)").format(-days), red
+            elif days == 0:
+                status, fill = _("Due today"), amber
+            else:
+                status = _("Due in {0} day(s)").format(days)
+                fill = amber if days <= CHASE_DUE_SOON_DAYS else None
+        ws.cell(r, 10, ln["pending"])
+        ws.cell(r, 11, ln["needed"])
+        sc = ws.cell(r, 12, status)
+        if fill:
+            sc.fill = fill
+        r += 1
+
+    _bold_cells(ws, r, {1: _("TOTAL"), 11: "=SUM(K2:K{0})".format(r - 1)})
+    for col, width in zip("ABCDEFGHIJKL", (18, 30, 16, 13, 16, 20, 26, 12, 13, 14, 15, 20)):
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = "A2"
+    return len(lines)
+
+
+def _chase_lines(mr_rows):
+    """[{item_code, item_name, required, actual, short, po, supplier, po_date,
+    expected, pending, needed}] - one per open PO line production is waiting on,
+    sorted by Expected Date (undated last). See _build_chase_list_sheet."""
+    purchase_items = sorted({r["item_code"] for r in mr_rows if r.get("material_request_type") == "Purchase"})
+    if not purchase_items:
+        return []
+
+    required, actual = {}, {}
+    for row in mr_rows:
+        if row.get("material_request_type") != "Purchase":
+            continue
+        item = row["item_code"]
+        required[item] = required.get(item, 0.0) + flt(row.get("required_bom_qty"))
+        actual[item] = flt(row.get("actual_qty"))  # per-item constant
+
+    reserved_wo = _reserved_against_open_wo_map(purchase_items)
+    incoming_wo = _projected_incoming_from_open_wo_map(purchase_items)
+    short = {}
+    for item in purchase_items:
+        s = flt(required.get(item)) - flt(actual.get(item)) - flt(incoming_wo.get(item)) + flt(reserved_wo.get(item))
+        if s > 0:
+            short[item] = s
+    if not short:
+        return []
+
+    po_lines = frappe.db.sql(
+        """
+        SELECT poi.item_code, poi.parent AS po, po.supplier, po.transaction_date AS po_date,
+            COALESCE(poi.schedule_date, po.schedule_date) AS expected,
+            GREATEST(poi.qty - IFNULL(poi.received_qty, 0), 0) AS pending
+        FROM `tabPurchase Order Item` poi
+        INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+        WHERE poi.item_code IN %(items)s
+            AND po.docstatus = 1
+            AND po.status NOT IN ('Closed', 'Cancelled', 'Completed')
+            AND poi.qty > IFNULL(poi.received_qty, 0)
+        ORDER BY (COALESCE(poi.schedule_date, po.schedule_date) IS NULL),
+            COALESCE(poi.schedule_date, po.schedule_date), po.transaction_date, poi.parent, poi.idx
+        """,
+        {"items": sorted(short)},
+        as_dict=True,
+    )
+    info = _item_info_map(sorted(short))
+
+    out = []
+    left = dict(short)
+    for p in po_lines:
+        need = min(flt(p.pending), left.get(p.item_code, 0.0))
+        if need <= 0:
+            continue
+        left[p.item_code] -= need
+        out.append({
+            "item_code": p.item_code,
+            "item_name": (info.get(p.item_code) or {}).get("item_name"),
+            "required": flt(required.get(p.item_code)),
+            "actual": flt(actual.get(p.item_code)),
+            "short": short[p.item_code],
+            "po": p.po,
+            "supplier": p.supplier,
+            "po_date": p.po_date,
+            "expected": p.expected,
+            "pending": flt(p.pending),
+            "needed": need,
+        })
     return out
 
 

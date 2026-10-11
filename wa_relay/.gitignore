@@ -1,0 +1,4 @@
+# Holds the Frappe secret, WA-AKG API key and webhook secret - never commit.
+.env
+__pycache__/
+*.pyc

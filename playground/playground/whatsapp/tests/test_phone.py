@@ -52,17 +52,71 @@ class TestNormalizePhone(unittest.TestCase):
 			self.assertIsNone(normalize_phone(raw), raw)
 
 
+class FakeDB:
+	"""Answers the two get_value lookups _mapped_user makes, from in-memory rows."""
+
+	def __init__(self, mappings=(), users=None):
+		self.mappings = list(mappings)  # (phone, user, enabled)
+		self.users = users or {}  # user -> enabled
+		self.calls = []
+
+	def get_value(self, doctype, filters, fieldname=None, *a, **k):
+		self.calls.append((doctype, filters, fieldname))
+		if doctype == "WhatsApp User":
+			for phone, user, enabled in self.mappings:
+				if phone == filters["phone"] and enabled == filters["enabled"]:
+					return user
+			return None
+		if doctype == "User":
+			return self.users.get(filters)
+		raise AssertionError(f"unexpected lookup on {doctype}")
+
+
 class TestGetUserFromPhone(unittest.TestCase):
 	def setUp(self):
 		patcher = patch.object(phone_mod.frappe, "conf", {})
 		patcher.start()
 		self.addCleanup(patcher.stop)
 
-	def test_returns_normalised_sender_with_no_user_in_phase_1(self):
-		self.assertEqual(get_user_from_phone("+91 98123 45678"), Sender(phone="919812345678", user=None))
+	def resolve(self, raw, mappings=(), users=None):
+		db = FakeDB(mappings, users)
+		with patch.object(phone_mod.frappe, "db", db):
+			return get_user_from_phone(raw), db
 
-	def test_invalid_phone_returns_none(self):
-		self.assertIsNone(get_user_from_phone("12"))
+	def test_mapped_number_resolves_from_any_format(self):
+		mappings = [("919812345678", "ravi@frontec.in", 1)]
+		users = {"ravi@frontec.in": 1}
+		for raw in ("+91 98123 45678", "09812345678", "9812345678", "919812345678@s.whatsapp.net"):
+			sender, db = self.resolve(raw, mappings, users)
+			self.assertEqual(sender, Sender(phone="919812345678", user="ravi@frontec.in"), raw)
+			# The lookup always uses the normalised number, never the raw text.
+			self.assertEqual(db.calls[0], ("WhatsApp User", {"phone": "919812345678", "enabled": 1}, "user"))
+
+	def test_unmapped_number_has_no_user(self):
+		sender, _ = self.resolve("+91 98123 45678", [("919800000000", "ravi@frontec.in", 1)], {"ravi@frontec.in": 1})
+		self.assertEqual(sender, Sender(phone="919812345678", user=None))
+
+	def test_disabled_mapping_has_no_user(self):
+		sender, _ = self.resolve("919812345678", [("919812345678", "ravi@frontec.in", 0)], {"ravi@frontec.in": 1})
+		self.assertIsNone(sender.user)
+
+	def test_disabled_erpnext_user_has_no_user(self):
+		sender, _ = self.resolve("919812345678", [("919812345678", "ravi@frontec.in", 1)], {"ravi@frontec.in": 0})
+		self.assertIsNone(sender.user)
+
+	def test_deleted_erpnext_user_has_no_user(self):
+		sender, _ = self.resolve("919812345678", [("919812345678", "gone@frontec.in", 1)], {})
+		self.assertIsNone(sender.user)
+
+	def test_reserved_users_are_never_returned(self):
+		for user in ("Administrator", "Guest"):
+			sender, _ = self.resolve("919812345678", [("919812345678", user, 1)], {user: 1})
+			self.assertIsNone(sender.user, user)
+
+	def test_invalid_phone_returns_none_without_lookup(self):
+		sender, db = self.resolve("12")
+		self.assertIsNone(sender)
+		self.assertEqual(db.calls, [])
 
 
 if __name__ == "__main__":

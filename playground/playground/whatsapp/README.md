@@ -1,17 +1,22 @@
-# WA-AKG ↔ Frappe WhatsApp integration (Phase 1)
+# WA-AKG ↔ Frappe WhatsApp integration
 
 ```
-WhatsApp → WA-AKG → POST handle_message → intent router → (ERPNext, later) → JSON reply → WA-AKG → WhatsApp
+WhatsApp → WA-AKG → wa_relay → POST handle_message → number→User mapping → intent router → ERPNext (as that user) → JSON reply → WA-AKG → WhatsApp
 ```
 
-Phase 1 proves connectivity only: `hello` and `ping` are answered, everything
-else gets a "not implemented yet" reply. No ERPNext business data is reachable.
+- Phase 1: endpoint, log, `hello` / `ping`.
+- Phase 2: `wa_relay/` container between WA-AKG and Frappe.
+- Phase 3: **WhatsApp User** mapping (number → ERPNext User) and the first
+  business query, `stock XYZ-123`. Unmapped numbers still only get `hello` / `ping`.
 
 | Piece | Where |
 |---|---|
 | Endpoint | `playground/api/whatsapp.py` → `handle_message` |
 | Phone normalisation, sender mapping | `playground/playground/whatsapp/phone.py` (`normalize_phone`, `get_user_from_phone`) |
-| Intent router | `playground/playground/whatsapp/router.py` (`COMMANDS`) |
+| Number → User mapping | DocType **WhatsApp User** |
+| Intent router | `playground/playground/whatsapp/router.py` (`COMMANDS`, `parse_natural_language`) |
+| Run-as-user helper | `playground/playground/whatsapp/user_context.py` (`as_user`) |
+| `stock` command | `playground/playground/whatsapp/stock.py` |
 | Request log | DocType **WhatsApp Query Log** |
 | Tests | `playground/playground/whatsapp/tests/` |
 
@@ -87,13 +92,17 @@ Error:
 A body that is not valid JSON at all is rejected by Frappe itself before it
 reaches this handler, so it gets Frappe's standard error response, not the shape above.
 
-Commands in Phase 1:
+Commands:
 
-| Message | Reply |
-|---|---|
-| `hello` / `Hello` / `Hello!` | `Hello from Frontec ERP 👋` |
-| `ping` | `pong` |
-| anything else | `Frontec ERP is connected, but this command is not implemented yet.` |
+| Message | Needs mapping | Reply |
+|---|---|---|
+| `hello` / `Hello` / `Hello!` | no | `Hello from Frontec ERP 👋` |
+| `ping` | no | `pong` |
+| `stock XYZ-123` | yes | Stock per warehouse — see [Stock command](#9-stock-command) |
+| anything else | — | `Frontec ERP is connected, but this command is not implemented yet.` |
+
+Business errors (unmapped number, no permission, unknown item) are normal
+HTTP 200 replies with a polite message, so the sender always gets an answer.
 
 ## 5. Example
 
@@ -158,46 +167,127 @@ source IP, incoming message, detected intent, reply, status
 Long messages are clipped to 1000 characters. Rows older than 90 days are
 pruned by **Log Settings** (change the retention there).
 
-## 8. Security model (applies to every later phase)
+## 8. Linking a WhatsApp number to an ERPNext user
+
+Business commands only work for numbers an administrator has linked to an
+ERPNext **User**. Everyone else can still say `hello` / `ping`, and gets a polite
+"your number is not linked" reply to anything that needs data.
+
+1. Desk → search **WhatsApp User** → **New** (System Manager only).
+2. **WhatsApp Number**: the sender's number in any format (`+91 98123 45678`,
+   `09812345678`, …). It is saved normalised (`919812345678`) — the same form the
+   endpoint looks up, so formatting differences don't matter. One row per number
+   (unique); one user may have several numbers.
+3. **ERPNext User**: the user whose roles and User Permissions should apply. It
+   must be an enabled user; `Administrator` and `Guest` are rejected.
+4. **Enabled** (default on): untick to cut a number off without deleting it.
+   Disabling the ERPNext User has the same effect.
+
+Changes take effect on the next message — no restart. Every change is tracked
+(**Track Changes** is on), and each request's resolved user is recorded in
+**WhatsApp Query Log → ERPNext User**.
+
+**Why a separate mapping instead of `User.mobile_no`:** which number may act as
+which user is an authorization decision, and `mobile_no` is contact data:
+
+- Users can edit it on their own profile, so the admin would not control who
+  can reach ERPNext over WhatsApp — and a typo or a shared office number would
+  silently grant access.
+- It isn't unique: two users with the same number make the lookup ambiguous.
+- It's free-format, so matching needs normalising every row on every message.
+- There's no opt-in: every user who happens to have a mobile number on file
+  would immediately be able to query ERPNext from WhatsApp.
+
+**WhatsApp User** is writable only by System Manager, unique per normalised
+number, has an explicit on/off switch, and keeps an audit trail.
+
+## 9. Stock command
+
+```
+stock XYZ-123
+```
+
+Also understood (whole message must match, one item code, no LLM):
+`How many pcs of XYZ-123 are available?`, `how much stock of item XYZ-123 do we have`,
+`stock of XYZ-123`, `What is the stock for XYZ-123?`. Accepted unit words:
+pcs, pieces, units, nos, qty, quantity, stock.
+
+Reply:
+
+```
+📦 *XYZ-123* - Widget Blue
+In stock: *120.5* Nos
+
+• Stores - FT: 100 (projected 80)
+• WIP - FT: 20.5
+```
+
+- Exact item code (case-insensitive); the canonical code is shown. No fuzzy or
+  item-name search.
+- Per-warehouse **actual qty** (from **Bin**), largest first; projected qty is
+  shown when it differs. Warehouses with zero actual and projected qty are skipped.
+- At most 10 warehouses are listed, then `…and N more warehouses`; the
+  **In stock** total covers all of them.
+- Replies: not linked → ask admin to add a *WhatsApp User*; no Item/Bin read
+  permission → "doesn't have permission to view stock"; item missing **or not
+  visible to that user** → "Item *X* not found" (the two are deliberately
+  indistinguishable); non-stock item → "is not a stock item".
+
+## 10. Permission model
 
 - WA-AKG can call exactly one method. There is no route from WhatsApp text to
   `/api/resource`, SQL, an arbitrary DocType or an arbitrary method: the router
-  only dispatches to functions listed in `COMMANDS`.
-- The ERPNext user is resolved **server-side** from the WhatsApp number
-  (`get_user_from_phone`). Nothing in the message or request body can choose or
-  claim a user. In Phase 1 the mapping is a placeholder that always returns
-  `user=None`.
-- Business handlers (Phase 3+) must refuse when `sender.user` is None and must
-  read data with that user's permissions (e.g. `frappe.has_permission` /
-  `frappe.get_list` run as that user) — never via `ignore_permissions` or as
-  Administrator.
+  only dispatches to functions listed in `COMMANDS`, and the natural-language
+  patterns can only produce one of those commands.
+- The ERPNext user is resolved **server-side** from the normalised WhatsApp
+  number via **WhatsApp User** (`get_user_from_phone`). Nothing in the message or
+  request body can choose or claim a user.
+- The endpoint itself runs as **Guest**. A business handler refuses when
+  `sender.user` is None; otherwise it wraps its lookup in
+  `user_context.as_user(sender.user)`, which `frappe.set_user`s to the mapped
+  user and restores the original user in a `finally` (also when the lookup
+  raises), so logging and session handling afterwards run as Guest again.
+- Inside, reads go only through permission-checked APIs: `frappe.has_permission`
+  (with `user=`) and `frappe.get_list` — so the user's roles, **User
+  Permissions** (e.g. restricted to certain warehouses) and permission query
+  conditions all apply, exactly as in the desk. No `ignore_permissions`, no
+  `frappe.get_all` / `frappe.db.*` on business data, never as Administrator
+  (`as_user` refuses Administrator and Guest outright).
+- The only privileged reads are the mapping lookup itself (WhatsApp User + the
+  User's enabled flag) and the log writes — server configuration, never
+  returned to the sender.
 
-## 9. Adding a command (Phase 3 onward)
+For `stock` this means the mapped user needs **read** on Item, Bin and
+Warehouse (ERPNext's Stock User / Stock Manager roles have it; Sales User and
+Purchase User usually do too).
+
+## 11. Adding a command
 
 ```python
-# playground/playground/whatsapp/router.py
-def get_stock(args, sender):
+# playground/playground/whatsapp/order.py
+def get_order_status(args, sender):
 	if not sender.user:
-		return "Your number is not linked to an ERPNext user."
-	...  # query Bin with sender.user's permissions, return text
+		return NOT_LINKED_REPLY
+	with as_user(sender.user):
+		...  # frappe.has_permission / frappe.get_list only
 
+# playground/playground/whatsapp/router.py
 COMMANDS = {
-	"hello": hello,
-	"ping": ping,
-	"stock": get_stock,  # "stock XYZ-123"
+	...
+	"order": get_order_status,  # "order SO-00045"
 }
 ```
 
-Add a router test for each new command. Natural-language queries ("How many
-pcs of XYZ-123 are available?") will be handled by a separate step in front of
-the router, which still only ever resolves to a registered command.
+Add tests for the handler (refused when unmapped, runs as the user, session
+restored on error, permission denied) and a router test for the new command.
 
-## 10. Tests
+## 12. Tests
 
-On the bench (no WhatsApp/WA-AKG calls, no data written — Frappe is mocked):
+On the bench (no WhatsApp/WA-AKG calls, no data read or written — Frappe is mocked):
 
 ```bash
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_handle_message
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_phone
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_router
+bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_stock
 ```

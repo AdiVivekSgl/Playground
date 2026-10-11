@@ -16,7 +16,8 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from playground.api import whatsapp
-from playground.playground.whatsapp import router
+from playground.playground.whatsapp import phone as phone_mod
+from playground.playground.whatsapp import router, stock
 
 SECRET = "s3cr3t-test-value-0123456789abcdef"
 
@@ -38,8 +39,8 @@ class FakeLog:
 
 class WhatsAppEndpointTestCase(unittest.TestCase):
 	@contextmanager
-	def env(self, header=SECRET, conf_secret=SECRET):
-		"""Patch site config, the secret header and log writes; yields the list of FakeLogs."""
+	def env(self, header=SECRET, conf_secret=SECRET, mapped_user=None):
+		"""Patch site config, the secret header, the number->user lookup and log writes; yields the FakeLogs."""
 		logs = []
 
 		def get_doc(fields):
@@ -50,6 +51,7 @@ class WhatsAppEndpointTestCase(unittest.TestCase):
 		conf = {"wa_akg_secret": conf_secret} if conf_secret is not None else {}
 		with patch.object(whatsapp.frappe, "conf", conf), \
 			patch.object(whatsapp, "_get_secret_header", return_value=header), \
+			patch.object(phone_mod, "_mapped_user", return_value=mapped_user), \
 			patch.object(whatsapp.frappe, "get_doc", side_effect=get_doc), \
 			patch.object(whatsapp.frappe, "log_error", MagicMock()), \
 			patch.object(whatsapp, "now_datetime", return_value="2026-10-10 12:00:00"):
@@ -126,7 +128,7 @@ class TestCommands(WhatsAppEndpointTestCase):
 		self.assertEqual(body, {"success": True, "reply": "pong"})
 
 	def test_unknown_command(self):
-		for text in ("stock XYZ-123", "what is my outstanding", "frappe.db.sql select 1"):
+		for text in ("order SO-00045", "what is my outstanding", "frappe.db.sql select 1"):
 			with self.env():
 				status, body = self.call(message=text)
 			self.assertEqual(status, 200)
@@ -200,7 +202,7 @@ class TestLogging(WhatsAppEndpointTestCase):
 		self.assertTrue(log.inserted)
 		self.assertEqual(log.fields["doctype"], "WhatsApp Query Log")
 		self.assertEqual(log.fields["phone"], "919812345678")  # normalised
-		self.assertIsNone(log.fields["erpnext_user"])  # Phase 1: no mapping yet
+		self.assertIsNone(log.fields["erpnext_user"])  # unmapped number
 		self.assertEqual(log.fields["session_id"], "frontec-test")
 		self.assertEqual(log.fields["incoming_message"], "Hello")
 		self.assertEqual(log.fields["intent"], "hello")
@@ -208,9 +210,28 @@ class TestLogging(WhatsAppEndpointTestCase):
 		self.assertEqual(log.fields["status"], "Processed")
 		self.assertEqual(log.fields["timestamp"], "2026-10-10 12:00:00")
 
+	def test_mapped_user_is_logged(self):
+		with self.env(mapped_user="ravi@frontec.in") as logs:
+			self.call(message="hello")
+		self.assertEqual(logs[0].fields["erpnext_user"], "ravi@frontec.in")
+		self.assertEqual(logs[0].fields["status"], "Processed")
+
+	def test_mapping_is_looked_up_with_normalised_number(self):
+		with self.env(), patch.object(phone_mod, "_mapped_user", return_value=None) as lookup:
+			self.call(phone="+91 98123-45678")
+		lookup.assert_called_once_with("919812345678")
+
+	def test_stock_from_unmapped_number_is_refused_and_logged(self):
+		with self.env() as logs:
+			status, body = self.call(message="stock XYZ-123")
+		self.assertEqual(status, 200)
+		self.assertEqual(body["reply"], stock.NOT_LINKED_REPLY)
+		self.assertEqual(logs[0].fields["intent"], "stock")
+		self.assertIsNone(logs[0].fields["erpnext_user"])
+
 	def test_unknown_command_logged_with_unknown_intent(self):
 		with self.env() as logs:
-			self.call(message="stock XYZ-123")
+			self.call(message="order SO-00045")
 		self.assertEqual(logs[0].fields["intent"], "unknown")
 		self.assertEqual(logs[0].fields["status"], "Processed")
 

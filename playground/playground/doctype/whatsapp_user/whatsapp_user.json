@@ -1,0 +1,28 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp User",
+ "module": "Playground",
+ "custom": 0,
+ "engine": "InnoDB",
+ "autoname": "hash",
+ "title_field": "phone",
+ "search_fields": "user,full_name",
+ "show_title_field_in_link": 1,
+ "track_changes": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "description": "Admin-maintained mapping from a WhatsApp number to the ERPNext User whose permissions apply to queries sent from that number (playground.api.whatsapp.handle_message). Numbers not listed here, or disabled, can only use hello/ping.",
+ "field_order": ["phone", "enabled", "column_break_main", "user", "full_name", "notes_section", "notes"],
+ "fields": [
+  {"fieldname": "phone", "fieldtype": "Data", "label": "WhatsApp Number", "reqd": 1, "unique": 1, "in_list_view": 1, "in_standard_filter": 1, "description": "Any format (+91 98123 45678, 09812345678, ...). Saved normalised to country code + number, e.g. 919812345678."},
+  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled", "default": "1", "in_list_view": 1, "in_standard_filter": 1, "description": "Untick to stop this number reaching ERPNext data without deleting the mapping."},
+  {"fieldname": "column_break_main", "fieldtype": "Column Break"},
+  {"fieldname": "user", "fieldtype": "Link", "options": "User", "label": "ERPNext User", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1, "description": "Queries from this number run with this user's roles and User Permissions. The user must be enabled."},
+  {"fieldname": "full_name", "fieldtype": "Data", "label": "Full Name", "fetch_from": "user.full_name", "read_only": 1},
+  {"fieldname": "notes_section", "fieldtype": "Section Break", "collapsible": 1, "label": "Notes"},
+  {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1}
+ ]
+}

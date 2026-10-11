@@ -22,6 +22,11 @@ NATIONAL_NUMBER_LENGTH = 10
 MIN_DIGITS = 8
 MAX_DIGITS = 15
 
+# Admin-maintained number -> User mapping (System Manager only). See README.md.
+MAPPING_DOCTYPE = "WhatsApp User"
+# Never reachable from WhatsApp: Guest is "nobody", Administrator bypasses all permissions.
+RESERVED_USERS = frozenset({"Guest", "Administrator"})
+
 
 @dataclass(frozen=True)
 class Sender:
@@ -70,12 +75,22 @@ def normalize_phone(phone):
 def get_user_from_phone(phone):
 	"""Resolve a WhatsApp number to a Sender (normalised phone + ERPNext User).
 
-	Phase 1 placeholder: the number is normalised but NOT mapped to any user, so
-	`user` is always None and no ERPNext data is reachable. Phase 3 will add an
-	explicit, admin-maintained mapping (number -> enabled User) looked up here;
-	the mapping is server-side only - nothing the sender types can choose the user.
+	The user comes only from an enabled "WhatsApp User" row for the normalised
+	number - nothing the sender types can choose or claim a user. Unmapped or
+	disabled numbers, disabled Users and Guest/Administrator all give user=None.
 	"""
 	normalized = normalize_phone(phone)
 	if not normalized:
 		return None
-	return Sender(phone=normalized, user=None)
+	return Sender(phone=normalized, user=_mapped_user(normalized))
+
+
+def _mapped_user(phone):
+	# Plain db reads: this is server-side configuration looked up by the endpoint
+	# (running as Guest), not data returned to the sender.
+	user = frappe.db.get_value(MAPPING_DOCTYPE, {"phone": phone, "enabled": 1}, "user")
+	if not user or user in RESERVED_USERS:
+		return None
+	if not frappe.db.get_value("User", user, "enabled"):
+		return None
+	return user

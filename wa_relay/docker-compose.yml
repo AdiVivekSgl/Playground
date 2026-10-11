@@ -1,0 +1,19 @@
+# WA-AKG -> Frappe relay. Joins WA-AKG's own Docker network so the two talk
+# container-to-container (WA-AKG -> http://wa-relay:8787/webhook, relay ->
+# http://wa-akg-app:3000). Only the health check is published, and only on
+# localhost - nothing is reachable from the LAN or internet.
+services:
+  wa-relay:
+    build: .
+    container_name: wa-relay
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8787:8787"
+    networks:
+      - wa-akg
+
+networks:
+  wa-akg:
+    external: true
+    name: wa-akg_default

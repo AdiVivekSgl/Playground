@@ -196,6 +196,13 @@ doc_events = {
 		"validate": "playground.playground.production_user.guard_stock_entry_origin",
 		"on_submit": "playground.playground.label_printing.on_stock_entry_submit",
 	},
+	# Purchase Order live stock: recompute the item "Available Qty at Warehouse /
+	# at Company" columns whenever a draft PO is opened/reloaded, and on save/submit
+	# (see playground.playground.purchase_order_stock).
+	"Purchase Order": {
+		"onload": "playground.playground.purchase_order_stock.on_purchase_order_onload",
+		"validate": "playground.playground.purchase_order_stock.on_purchase_order_validate",
+	},
 	# RFQ Intake: emails forwarded to the intake mailbox (RFQ Intake Settings) are
 	# queued for a background job that saves an email PDF + attachments, extracts
 	# Title/Customer/Territory/Target Date/Value with Claude, and creates/updates an

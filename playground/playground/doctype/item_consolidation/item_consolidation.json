@@ -1,0 +1,134 @@
+{
+ "doctype": "DocType",
+ "name": "Item Consolidation",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 0,
+ "issingle": 0,
+ "is_submittable": 1,
+ "naming_rule": "Expression (old style)",
+ "autoname": "ICN-.#####",
+ "track_changes": 1,
+ "engine": "InnoDB",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "description": "Retire duplicate items without merging them: stock is repacked into the item to keep (posted now, so nothing is reposted into closed periods), masters and BOMs are pointed at it, and the old item is disabled.",
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "options": "Company",
+   "label": "Company",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Stock of the retired items is moved in this company's warehouses."
+  },
+  {
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nQueued\nIn Progress\nCompleted\nPartly Failed\nFailed",
+   "default": "Draft",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "options_section",
+   "fieldtype": "Section Break",
+   "label": "Steps"
+  },
+  {
+   "fieldname": "copy_masters",
+   "fieldtype": "Check",
+   "label": "Copy Masters",
+   "default": "1",
+   "description": "Item Prices, reorder levels, supplier/customer item codes, Product Bundles and Pricing Rules - only what the item to keep is missing."
+  },
+  {
+   "fieldname": "replace_in_boms",
+   "fieldtype": "Check",
+   "label": "Replace in BOMs",
+   "default": "1",
+   "description": "Swap the component in every active or draft BOM (submitted BOMs are edited in place, as with the BOM Update Tool's Replace Component Item)."
+  },
+  {
+   "fieldname": "col_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "update_bom_costs",
+   "fieldtype": "Check",
+   "label": "Update BOM Costs Afterwards",
+   "default": "1",
+   "depends_on": "replace_in_boms",
+   "description": "Queue the BOM Update Tool's Update Cost for all BOMs so parent BOMs pick up the change."
+  },
+  {
+   "fieldname": "disable_old_items",
+   "fieldtype": "Check",
+   "label": "Disable Retired Items",
+   "default": "1",
+   "description": "Disable each retired item and note which item replaced it. Requires that no open documents still use it."
+  },
+  {
+   "fieldname": "items_section",
+   "fieldtype": "Section Break",
+   "label": "Items"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "options": "Item Consolidation Pair",
+   "label": "Item Pairs",
+   "reqd": 1,
+   "allow_bulk_edit": 1
+  },
+  {
+   "fieldname": "remarks_section",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "options": "Item Consolidation",
+   "label": "Amended From",
+   "read_only": 1,
+   "no_copy": 1,
+   "print_hide": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "submit": 1
+  },
+  {
+   "role": "Stock Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "submit": 1
+  },
+  {
+   "role": "Manufacturing Manager",
+   "read": 1
+  }
+ ]
+}

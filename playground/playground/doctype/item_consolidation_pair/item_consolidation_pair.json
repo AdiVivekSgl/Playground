@@ -1,0 +1,108 @@
+{
+ "doctype": "DocType",
+ "name": "Item Consolidation Pair",
+ "module": "Playground",
+ "custom": 0,
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {
+   "fieldname": "old_item",
+   "fieldtype": "Link",
+   "options": "Item",
+   "label": "Item to Retire",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "old_item_name",
+   "fieldtype": "Data",
+   "label": "Retired Item Name",
+   "fetch_from": "old_item.item_name",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "keep_item",
+   "fieldtype": "Link",
+   "options": "Item",
+   "label": "Item to Keep",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "keep_item_name",
+   "fieldtype": "Data",
+   "label": "Kept Item Name",
+   "fetch_from": "keep_item.item_name",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pending\nDone\nFailed",
+   "default": "Pending",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "result_section",
+   "fieldtype": "Section Break",
+   "label": "Result"
+  },
+  {
+   "fieldname": "stock_entries",
+   "fieldtype": "Small Text",
+   "label": "Repack Stock Entries",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "boms_updated",
+   "fieldtype": "Small Text",
+   "label": "BOMs Updated",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "masters_updated",
+   "fieldtype": "Small Text",
+   "label": "Masters Copied",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Warnings",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Small Text",
+   "label": "Error",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
+  }
+ ]
+}

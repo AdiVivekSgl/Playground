@@ -23,6 +23,8 @@ function icn_render_preview(reports) {
 			const ok = !r.blockers.length;
 			const badge = ok
 				? `<span class="indicator-pill green">${__("Ready")}</span>`
+				: r.open_documents_only
+				? `<span class="indicator-pill orange">${__("Open documents only - can disable anyway on Submit")}</span>`
 				: `<span class="indicator-pill red">${__("Blocked")}</span>`;
 			const stock = r.stock.length
 				? `<table class="table table-bordered" style="font-size:12px;margin:4px 0;">
@@ -57,6 +59,40 @@ frappe.ui.form.on("Item Consolidation", {
 		const active = () => ({ filters: { disabled: 0, has_variants: 0 } });
 		frm.set_query("old_item", "items", active);
 		frm.set_query("keep_item", "items", active);
+	},
+
+	// When open documents are the ONLY blocker, offer to disable the retired items
+	// anyway instead of letting the server refuse. Any other blocker falls through
+	// to the server's "Resolve these first" error unchanged.
+	before_submit(frm) {
+		if (!frm.doc.disable_old_items || frm.doc.disable_despite_open_documents) return;
+
+		return frappe.call({ method: `${ICN_API}.preview`, args: { name: frm.doc.name } }).then((r) => {
+			const blocked = (r.message || []).filter((p) => p.blockers.length);
+			if (!blocked.length || !blocked.every((p) => p.open_documents_only)) return;
+
+			const rows = blocked
+				.map(
+					(p) => `<p><b>${__("Row")} ${p.idx} (${icn_esc(p.old_item)})</b></p>
+						${icn_list(p.blockers, "text-muted small")}`
+				)
+				.join("");
+			const message = `${rows}
+				<p>${__(
+					"Disable these items anyway? Stock, masters and BOMs move to the kept items as normal, but the documents above will fail on submit until they are amended to use the kept item."
+				)}</p>`;
+
+			return new Promise((resolve) => {
+				frappe.confirm(
+					message,
+					() => frm.set_value("disable_despite_open_documents", 1).then(resolve),
+					() => {
+						frappe.validated = false;
+						resolve();
+					}
+				);
+			});
+		});
 	},
 
 	refresh(frm) {

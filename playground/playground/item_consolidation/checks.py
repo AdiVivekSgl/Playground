@@ -56,7 +56,7 @@ OPEN_DOCUMENT_LIMIT = 20
 # --------------------------------------------------------------------------- #
 # Data gathering
 # --------------------------------------------------------------------------- #
-def check_pair(old_item, keep_item, company, disable_old_items=True, posting_date=None):
+def check_pair(old_item, keep_item, company, block_open_documents=True, posting_date=None):
 	"""Everything known about one pair, plus its blockers and warnings."""
 	old = _get_item(old_item)
 	keep = _get_item(keep_item)
@@ -75,14 +75,16 @@ def check_pair(old_item, keep_item, company, disable_old_items=True, posting_dat
 		lock_dates=get_lock_dates(company),
 		closed_accounting_period=_closed_accounting_period(company, posting_date or today()),
 	)
+	posting_date = posting_date or today()
 	blockers, warnings = evaluate_pair(
-		old_item,
-		keep_item,
-		context,
-		disable_old_items=disable_old_items,
-		posting_date=posting_date or today(),
+		old_item, keep_item, context, block_open_documents=block_open_documents, posting_date=posting_date
 	)
-	context.update(blockers=blockers, warnings=warnings)
+	# True when open documents are the only thing in the way - the form then offers
+	# to disable the item anyway instead of just refusing.
+	open_documents_only = bool(blockers) and not evaluate_pair(
+		old_item, keep_item, context, block_open_documents=False, posting_date=posting_date
+	)[0]
+	context.update(blockers=blockers, warnings=warnings, open_documents_only=open_documents_only)
 	return context
 
 
@@ -226,7 +228,7 @@ def _closed_accounting_period(company, posting_date):
 # --------------------------------------------------------------------------- #
 # Rules (pure)
 # --------------------------------------------------------------------------- #
-def evaluate_pair(old_item, keep_item, ctx, disable_old_items=True, posting_date=None):
+def evaluate_pair(old_item, keep_item, ctx, block_open_documents=True, posting_date=None):
 	"""Return (blockers, warnings) for a pair given the gathered ``ctx``."""
 	blockers, warnings = [], []
 	old, keep = ctx.get("old"), ctx.get("keep")
@@ -287,7 +289,7 @@ def evaluate_pair(old_item, keep_item, ctx, disable_old_items=True, posting_date
 	open_docs = ctx.get("open_documents") or []
 	if open_docs:
 		summary = "; ".join("{0}: {1}".format(d["doctype"], ", ".join(d["names"])) for d in open_docs)
-		if disable_old_items:
+		if block_open_documents:
 			blockers.append(
 				_("Open documents use {0} and would fail once it is disabled - complete, close or amend them: {1}").format(
 					old_item, summary

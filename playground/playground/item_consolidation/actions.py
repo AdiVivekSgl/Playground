@@ -123,13 +123,17 @@ def replace_in_boms(old_item, keep_item, boms):
 	return updated, skipped
 
 
-def disable_item(old_item, keep_item, reference):
+def disable_item(old_item, keep_item, reference, open_documents=None):
+	"""``open_documents`` (from checks.get_open_documents) is set when the user chose to
+	disable despite them; they are listed in the comment so the override is on record."""
 	item = frappe.get_doc("Item", old_item)
 	item.db_set("disabled", 1)
-	item.add_comment(
-		"Comment",
-		_("Disabled by Item Consolidation {0}: replaced by {1}.").format(reference, keep_item),
-	)
+	text = _("Disabled by Item Consolidation {0}: replaced by {1}.").format(reference, keep_item)
+	if open_documents:
+		text += " " + _("Disabled despite open documents: {0}").format(
+			"; ".join("{0}: {1}".format(d["doctype"], ", ".join(d["names"])) for d in open_documents)
+		)
+	item.add_comment("Comment", text)
 
 
 def _copy_item_prices(old_item, keep_item):

@@ -78,6 +78,15 @@
    "description": "Disable each retired item and note which item replaced it. Requires that no open documents still use it."
   },
   {
+   "fieldname": "disable_despite_open_documents",
+   "fieldtype": "Check",
+   "label": "Disable Even With Open Documents",
+   "default": "0",
+   "depends_on": "disable_old_items",
+   "no_copy": 1,
+   "description": "Disable the retired items even though open documents still use them. Those documents will then fail on submit until they are amended to the kept item. Offered on Submit when open documents are the only blocker."
+  },
+  {
    "fieldname": "items_section",
    "fieldtype": "Section Break",
    "label": "Items"

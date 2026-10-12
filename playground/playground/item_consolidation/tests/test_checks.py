@@ -9,6 +9,7 @@ No data is read - every input is built here.
 """
 
 import unittest
+from unittest.mock import patch
 
 import frappe
 
@@ -56,7 +57,7 @@ def stock(qty, value=100.0, warehouse="Stores - FT"):
 
 class EvaluatePairTest(unittest.TestCase):
 	def run_eval(self, c, disable=True, date="2026-10-12"):
-		return checks.evaluate_pair("OLD", "KEEP", c, disable_old_items=disable, posting_date=date)
+		return checks.evaluate_pair("OLD", "KEEP", c, block_open_documents=disable, posting_date=date)
 
 	def test_clean_pair_has_no_blockers(self):
 		blockers, warnings = self.run_eval(ctx(stock=[stock(5)]))
@@ -138,3 +139,38 @@ class ValidatePairRowsTest(unittest.TestCase):
 		self.assertEqual(len(checks.validate_pair_rows(self.rows(("A", "A")))), 2)  # self + chain
 		self.assertEqual(len(checks.validate_pair_rows(self.rows(("A", "K"), ("A", "J")))), 1)
 		self.assertEqual(len(checks.validate_pair_rows(self.rows(("A", "B"), ("B", "K")))), 1)
+
+
+class OpenDocumentsOnlyTest(unittest.TestCase):
+	"""check_pair flags pairs whose only blocker is open documents (the form then
+	offers to disable anyway). Every data gatherer is patched out."""
+
+	def check(self, keep=None, open_docs=()):
+		items = {"OLD": item("OLD"), "KEEP": keep or item("KEEP")}
+		with patch.multiple(
+			checks,
+			_get_item=lambda code: items.get(code),
+			get_stock_rows=lambda *a: [],
+			_other_company_stock=lambda *a: [],
+			get_open_documents=lambda *a: list(open_docs),
+			_active_boms=lambda *a: [],
+			_boms_producing=lambda *a: [],
+			_pending_reposts=lambda *a: [],
+			_active_reservations=lambda *a: [],
+			get_lock_dates=lambda *a: [],
+			_closed_accounting_period=lambda *a: None,
+		):
+			return checks.check_pair("OLD", "KEEP", "Frontec", block_open_documents=True)
+
+	def test_open_documents_only(self):
+		c = self.check(open_docs=[{"doctype": "Stock Entry", "names": ["MAT-STE-1"]}])
+		self.assertEqual(len(c.blockers), 1)
+		self.assertTrue(c.open_documents_only)
+
+	def test_other_blocker_is_not_overridable(self):
+		c = self.check(keep=item("KEEP", stock_uom="Kg"), open_docs=[{"doctype": "Stock Entry", "names": ["X"]}])
+		self.assertEqual(len(c.blockers), 2)
+		self.assertFalse(c.open_documents_only)
+
+	def test_clean_pair(self):
+		self.assertFalse(self.check().open_documents_only)

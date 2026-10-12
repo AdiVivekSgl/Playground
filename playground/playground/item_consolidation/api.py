@@ -100,7 +100,7 @@ def run_consolidation(name, user=None):
 def consolidate_pair(doc, row):
 	"""Run every enabled step for one pair; raises (rolling the pair back) on a blocker."""
 	ctx = checks.check_pair(
-		row.old_item, row.keep_item, doc.company, disable_old_items=cint(doc.disable_old_items)
+		row.old_item, row.keep_item, doc.company, block_open_documents=block_open_documents(doc)
 	)
 	if ctx.blockers:
 		frappe.throw("\n".join(ctx.blockers), title=_("Blocked"))
@@ -115,7 +115,12 @@ def consolidate_pair(doc, row):
 		else ([], [])
 	)
 	if cint(doc.disable_old_items):
-		actions.disable_item(row.old_item, row.keep_item, doc.name)
+		actions.disable_item(
+			row.old_item,
+			row.keep_item,
+			doc.name,
+			open_documents=ctx.open_documents if cint(doc.disable_despite_open_documents) else None,
+		)
 
 	notes = list(ctx.warnings) + [_("BOM not updated - {0}").format(s) for s in boms_skipped]
 	return {
@@ -124,6 +129,12 @@ def consolidate_pair(doc, row):
 		"masters_updated": "\n".join(masters),
 		"notes": "\n".join(notes),
 	}
+
+
+def block_open_documents(doc):
+	"""Open documents block a pair only when the item is being disabled and the user
+	has not chosen to disable it anyway."""
+	return bool(cint(doc.disable_old_items)) and not cint(doc.disable_despite_open_documents)
 
 
 def overall_status(row_statuses):
@@ -136,7 +147,7 @@ def overall_status(row_statuses):
 
 def _pair_report(doc, row):
 	ctx = checks.check_pair(
-		row.old_item, row.keep_item, doc.company, disable_old_items=cint(doc.disable_old_items)
+		row.old_item, row.keep_item, doc.company, block_open_documents=block_open_documents(doc)
 	)
 	return {
 		"idx": row.idx,
@@ -144,6 +155,7 @@ def _pair_report(doc, row):
 		"keep_item": row.keep_item,
 		"blockers": ctx.blockers,
 		"warnings": ctx.warnings,
+		"open_documents_only": ctx.open_documents_only,
 		"stock": [
 			{"warehouse": s.warehouse, "qty": s.actual_qty, "value": s.stock_value} for s in ctx.stock
 		],

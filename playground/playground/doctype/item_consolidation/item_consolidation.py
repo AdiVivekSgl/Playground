@@ -7,6 +7,7 @@ from frappe.model.document import Document
 from frappe.utils import cint
 
 from playground.playground.item_consolidation import api, checks
+from playground.playground.item_consolidation.api import block_open_documents
 
 
 class ItemConsolidation(Document):
@@ -24,7 +25,7 @@ class ItemConsolidation(Document):
 		problems = []
 		for row in self.items:
 			ctx = checks.check_pair(
-				row.old_item, row.keep_item, self.company, disable_old_items=cint(self.disable_old_items)
+				row.old_item, row.keep_item, self.company, block_open_documents=block_open_documents(self)
 			)
 			problems.extend(_("Row {0} ({1}): {2}").format(row.idx, row.old_item, b) for b in ctx.blockers)
 		if problems:

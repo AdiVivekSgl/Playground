@@ -29,6 +29,7 @@ def fake_doc(rows, **flags):
 	doc.replace_in_boms = flags.get("replace_in_boms", 1)
 	doc.update_bom_costs = flags.get("update_bom_costs", 1)
 	doc.disable_old_items = flags.get("disable_old_items", 1)
+	doc.disable_despite_open_documents = flags.get("disable_despite_open_documents", 0)
 	return doc
 
 
@@ -61,7 +62,7 @@ class ConsolidatePairTest(unittest.TestCase):
 			actions.replace_in_boms.return_value = (["BOM-1"], ["BOM-2: reason"])
 			result = api.consolidate_pair(doc, row("r1", "OLD", "KEEP"))
 
-		actions.disable_item.assert_called_once_with("OLD", "KEEP", "ICN-00001")
+		actions.disable_item.assert_called_once_with("OLD", "KEEP", "ICN-00001", open_documents=None)
 		self.assertEqual(result["stock_entries"], "SE-1")
 		self.assertEqual(result["boms_updated"], "BOM-1")
 		self.assertIn("a warning", result["notes"])
@@ -128,3 +129,26 @@ class RunConsolidationTest(unittest.TestCase):
 		doc, _db, recost = self.run_job([row("r1", "A", "K")], {"A": ok}, ["Done"])
 		doc.db_set.assert_any_call("status", "Completed")
 		recost.assert_not_called()
+
+	def test_override_passes_open_documents_to_disable(self):
+		docs = [{"doctype": "Stock Entry", "names": ["MAT-STE-1"]}]
+		ctx = clean_ctx()
+		ctx.open_documents = docs
+		doc = fake_doc([], disable_despite_open_documents=1)
+		with patch.object(api.checks, "check_pair", return_value=ctx) as check, patch.object(
+			api, "actions"
+		) as actions:
+			actions.move_stock.return_value = []
+			actions.replace_in_boms.return_value = ([], [])
+			api.consolidate_pair(doc, row("r1", "OLD", "KEEP"))
+		self.assertFalse(check.call_args.kwargs["block_open_documents"])
+		actions.disable_item.assert_called_once_with("OLD", "KEEP", "ICN-00001", open_documents=docs)
+
+
+class BlockOpenDocumentsTest(unittest.TestCase):
+	def test_only_when_disabling_without_override(self):
+		self.assertTrue(api.block_open_documents(fake_doc([], disable_old_items=1)))
+		self.assertFalse(
+			api.block_open_documents(fake_doc([], disable_old_items=1, disable_despite_open_documents=1))
+		)
+		self.assertFalse(api.block_open_documents(fake_doc([], disable_old_items=0)))

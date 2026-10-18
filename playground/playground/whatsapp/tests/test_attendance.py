@@ -30,8 +30,10 @@ NOW = datetime(2026, 10, 18, 9, 12, 30)
 PAGE_MESSAGE = (
 	"📍 FRONTEC ATTENDANCE\n"
 	"Location: https://www.google.com/maps?q=17.385044,78.486671\n"
-	"Accuracy: 12m"
+	"Accuracy: 12m\n"
+	"Ref: FA-MGW3X1K2-9F3A21C7"
 )
+REF = "FA-MGW3X1K2-9F3A21C7"
 
 
 class FakeDoc(frappe._dict):
@@ -50,8 +52,10 @@ class FakeDoc(frappe._dict):
 
 
 class FakeFrappe:
-	def __init__(self, employee="HR-EMP-00001", insert_error=None):
+	def __init__(self, employee="HR-EMP-00001", insert_error=None, used_refs=()):
 		self.session = SimpleNamespace(user="Guest")
+		self.used_refs = set(used_refs)
+		self.ref_checks = []
 		self.employee = employee
 		self.insert_error = insert_error
 		self.set_user_calls = []
@@ -64,6 +68,11 @@ class FakeFrappe:
 
 	def get_doc(self, data):
 		return FakeDoc(self, data)
+
+	def exists(self, doctype, filters):
+		assert doctype == "Remote Attendance", doctype
+		self.ref_checks.append(filters["message_ref"])
+		return "RA-2026-00001" if filters["message_ref"] in self.used_refs else None
 
 	def get_value(self, doctype, filters, fieldname):
 		assert doctype == "Employee", doctype
@@ -79,6 +88,7 @@ class AttendanceTestCase(unittest.TestCase):
 			patch.object(frappe, "set_user", fake.set_user), \
 			patch.object(frappe, "get_doc", fake.get_doc), \
 			patch.object(frappe.db, "get_value", fake.get_value), \
+			patch.object(frappe.db, "exists", fake.exists), \
 			patch.object(attendance, "now_datetime", lambda: NOW):
 			yield fake
 
@@ -145,7 +155,7 @@ class TestRecordAttendance(AttendanceTestCase):
 		self.assertIn("*Ravi Kumar*", reply)
 
 	def test_low_or_missing_accuracy_is_flagged(self):
-		for text in (PAGE_MESSAGE.replace("12m", "250m"), PAGE_MESSAGE.rsplit("\n", 1)[0]):
+		for text in (PAGE_MESSAGE.replace("12m", "250m"), PAGE_MESSAGE.replace("Accuracy: 12m\n", "")):
 			with self.fake() as fake:
 				reply = attendance.record_attendance(text, MAPPED)
 			self.assertEqual(fake.inserts[0][0]["low_accuracy"], 1, text)
@@ -162,6 +172,37 @@ class TestRecordAttendance(AttendanceTestCase):
 			reply = attendance.record_attendance("📍 FRONTEC ATTENDANCE\nLocation: home", MAPPED)
 		self.assertEqual(reply, attendance.NO_LOCATION_REPLY)
 		self.assertEqual((fake.inserts, fake.set_user_calls), ([], []))
+
+	def test_ref_is_stored(self):
+		with self.fake() as fake:
+			attendance.record_attendance(PAGE_MESSAGE.replace(REF, REF.lower()), MAPPED)
+		self.assertEqual(fake.ref_checks, [REF])
+		self.assertEqual(fake.inserts[0][0]["message_ref"], REF)
+
+	def test_forwarded_or_resent_message_is_rejected(self):
+		forwarded = "Forwarded\n" + PAGE_MESSAGE
+		for sender in (MAPPED, Sender(phone="919800000000", user="someone@frontec.in")):
+			with self.fake(used_refs={REF}) as fake:
+				reply = attendance.record_attendance(forwarded, sender)
+			self.assertEqual(reply, attendance.ALREADY_USED_REPLY.format(ref=REF))
+			self.assertEqual((fake.inserts, fake.set_user_calls), ([], []))
+
+	def test_message_without_ref_is_rejected(self):
+		for text in (
+			PAGE_MESSAGE.rsplit("\n", 1)[0],  # old page / typed by hand
+			PAGE_MESSAGE.replace(REF, "FA-123"),  # malformed
+			PAGE_MESSAGE.replace(REF, "FA-MGW3X1K2-9F3A21C7ZZ"),  # longer than a real Ref
+		):
+			with self.fake() as fake:
+				reply = attendance.record_attendance(text, MAPPED)
+			self.assertEqual(reply, attendance.NO_REF_REPLY, text)
+			self.assertEqual(fake.inserts, [])
+
+	def test_simultaneous_duplicate_loses_the_unique_index(self):
+		with self.fake(insert_error=frappe.UniqueValidationError("dup")) as fake:
+			reply = attendance.record_attendance(PAGE_MESSAGE, MAPPED)
+		self.assertEqual(reply, attendance.ALREADY_USED_REPLY.format(ref=REF))
+		self.assertEqual(fake.session.user, "Guest")
 
 	def test_session_restored_when_insert_fails(self):
 		with self.fake(insert_error=RuntimeError("db down")) as fake:

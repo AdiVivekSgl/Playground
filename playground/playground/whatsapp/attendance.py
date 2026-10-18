@@ -9,11 +9,17 @@ opens WhatsApp with a prefilled message to the Frontec number:
 	📍 FRONTEC ATTENDANCE
 	Location: https://www.google.com/maps?q=17.385044,78.486671
 	Accuracy: 12m
+	Ref: FA-MGW3X1K2-9F3A21C7
 
 When the employee taps Send it arrives here like any other text. A message
 carrying the FRONTEC ATTENDANCE marker becomes one **Remote Attendance** row
 for the sender's mapped ERPNext user. There is no IN/OUT: each message is one
 location record.
+
+The Ref is a one-time reference the page makes for every tap. It is stored in
+a unique field, so forwarding or resending an earlier attendance message
+(yours or someone else's) is rejected, and a message without a Ref (typed by
+hand, or from an old copy of the page) is not accepted.
 
 The coordinates are whatever the message says - the employee can edit the
 text before sending - so this is a self-reported location, not proof.
@@ -37,6 +43,8 @@ _MARKER_RE = re.compile(re.escape(MARKER), re.IGNORECASE)
 # "maps?q=17.385044,78.486671" (also &q=, or a space after the comma).
 _COORDS_RE = re.compile(r"[?&]q=\s*(?P<lat>[-+]?\d{1,2}(?:\.\d+)?)\s*,\s*(?P<lon>[-+]?\d{1,3}(?:\.\d+)?)")
 _ACCURACY_RE = re.compile(r"accuracy\s*:\s*(?P<m>\d{1,7})\s*m\b", re.IGNORECASE)
+# "Ref: FA-<base36 ms timestamp>-<8 hex random>", as made by the page's newMessageRef().
+_REF_RE = re.compile(r"\bref\s*:\s*(?P<ref>FA-[A-Z0-9]{6,12}-[A-F0-9]{8})\b", re.IGNORECASE)
 
 NOT_LINKED_REPLY = (
 	"Sorry, your WhatsApp number is not linked to an ERPNext user, so your attendance was not recorded. "
@@ -45,6 +53,14 @@ NOT_LINKED_REPLY = (
 NO_LOCATION_REPLY = (
 	"Sorry, I couldn't read a location in that attendance message, so nothing was recorded. "
 	"Please open the Frontec Attendance page again and send the message without editing it."
+)
+NO_REF_REPLY = (
+	"Sorry, that attendance message has no reference, so nothing was recorded. "
+	"Please open the Frontec Attendance page again and send the message it prepares without editing it."
+)
+ALREADY_USED_REPLY = (
+	"⚠️ This attendance message was already used (Ref {ref}), so it was not recorded again. "
+	"Forwarded or resent attendance messages are not accepted - open the Frontec Attendance page and send a new one."
 )
 RECORDED_REPLY = "✅ Attendance recorded for *{name}*\n🕒 {time}\n📍 {lat}, {lon}{accuracy}"
 LOW_ACCURACY_NOTE = "\n⚠️ Location accuracy is low - next time, try again outdoors or with GPS on."
@@ -67,6 +83,12 @@ def parse_location(message):
 	return lat, lon, int(accuracy.group("m")) if accuracy else None
 
 
+def parse_ref(message):
+	"""Return the message's one-time reference, upper-cased, or None."""
+	match = _REF_RE.search(message or "")
+	return match.group("ref").upper() if match else None
+
+
 def record_attendance(message, sender):
 	if not sender or not sender.user:
 		return NOT_LINKED_REPLY
@@ -74,6 +96,13 @@ def record_attendance(message, sender):
 	if location is None:
 		return NO_LOCATION_REPLY
 	lat, lon, accuracy = location
+	ref = parse_ref(message)
+	if ref is None:
+		return NO_REF_REPLY
+	# Server-side check across everyone's rows (the sender may not read them);
+	# the reply only says the Ref was used, never by whom or when.
+	if frappe.db.exists(DOCTYPE, {"message_ref": ref}):
+		return ALREADY_USED_REPLY.format(ref=ref)
 
 	# Created as the mapped user so they are its owner (the Employee role may
 	# read its own rows). ignore_permissions because nobody may create Remote
@@ -84,6 +113,7 @@ def record_attendance(message, sender):
 			{
 				"doctype": DOCTYPE,
 				"timestamp": now_datetime(),
+				"message_ref": ref,
 				"user": user,
 				"employee": _employee_for(user),
 				"phone": sender.phone,
@@ -96,7 +126,11 @@ def record_attendance(message, sender):
 				"source_message": message[:SOURCE_MESSAGE_LIMIT],
 			}
 		)
-		doc.insert(ignore_permissions=True)
+		try:
+			doc.insert(ignore_permissions=True)
+		except (frappe.UniqueValidationError, frappe.DuplicateEntryError):
+			# The same Ref arrived twice at once and the other one won the unique index.
+			return ALREADY_USED_REPLY.format(ref=ref)
 
 	return format_reply(doc)
 

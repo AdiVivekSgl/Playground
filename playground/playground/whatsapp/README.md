@@ -245,6 +245,7 @@ the phone's GPS and opens WhatsApp to the Frontec number with this text prefille
 📍 FRONTEC ATTENDANCE
 Location: https://www.google.com/maps?q=17.385044,78.486671
 Accuracy: 12m
+Ref: FA-MGW3X1K2-9F3A21C7
 ```
 
 When the employee taps **Send**, any message containing `FRONTEC ATTENDANCE`
@@ -255,6 +256,7 @@ router, and creates one **Remote Attendance** row:
 | Field | From |
 |---|---|
 | Received At | Server time when Frappe got the message (the page sends no time) |
+| Message Ref | The `Ref:` line, upper-cased - unique across all rows |
 | ERPNext User / Full Name | The sender's **WhatsApp User** mapping |
 | Employee | Active Employee whose **User ID** is that user (blank if none) |
 | Latitude / Longitude | The `q=lat,lon` of the map link (must be valid coordinates) |
@@ -263,6 +265,15 @@ router, and creates one **Remote Attendance** row:
 | WhatsApp Message | The raw text (first 1000 characters) |
 
 There is no IN/OUT: every message is its own row.
+
+**One-time Ref (no forwards):** every tap on the page makes a new
+`FA-<base36 ms timestamp>-<8 random hex>` reference. **Message Ref** is a
+unique field, so a forwarded or resent attendance message - the sender's own
+or a colleague's - is refused with "this attendance message was already used",
+and nothing is recorded. The reply never says who used the Ref or when. A
+message with the marker but no valid `Ref:` line (typed by hand, or from an old
+copy of the page) is refused too. Two copies arriving at the same moment are
+caught by the unique index itself.
 
 Reply:
 
@@ -274,7 +285,8 @@ Reply:
 
 plus a "location accuracy is low" note when flagged. Unmapped number → "not
 linked, nothing recorded"; marker but no readable coordinates → "couldn't read
-a location, nothing recorded".
+a location, nothing recorded"; no Ref → "has no reference"; Ref already
+recorded → "already used".
 
 **Who sees what:** rows are created only by this handler (`in_create`; nobody
 can add or edit one in the desk). System Manager, HR Manager and HR User can

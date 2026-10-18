@@ -13,12 +13,13 @@
  "sort_order": "DESC",
  "description": "One row per location message sent from the FTPL-Attendance page over WhatsApp (WA-AKG -> playground.api.whatsapp.handle_message). Created only by the WhatsApp endpoint, for the ERPNext User mapped to the sender's number in WhatsApp User.",
  "field_order": [
-  "timestamp", "user", "full_name", "column_break_who", "employee", "employee_name", "phone",
+  "timestamp", "message_ref", "user", "full_name", "column_break_who", "employee", "employee_name", "phone",
   "location_section", "latitude", "longitude", "accuracy", "low_accuracy", "column_break_loc", "map_link", "location",
   "source_section", "source_message"
  ],
  "fields": [
   {"fieldname": "timestamp", "fieldtype": "Datetime", "label": "Received At", "reqd": 1, "in_list_view": 1, "read_only": 1, "description": "When Frappe received the WhatsApp message (server time)."},
+  {"fieldname": "message_ref", "fieldtype": "Data", "label": "Message Ref", "reqd": 1, "unique": 1, "in_standard_filter": 1, "read_only": 1, "description": "One-time reference the attendance page puts in each message. Unique, so a forwarded or resent message cannot be recorded twice."},
   {"fieldname": "user", "fieldtype": "Link", "options": "User", "label": "ERPNext User", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1, "read_only": 1},
   {"fieldname": "full_name", "fieldtype": "Data", "label": "Full Name", "fetch_from": "user.full_name", "read_only": 1},
   {"fieldname": "column_break_who", "fieldtype": "Column Break"},

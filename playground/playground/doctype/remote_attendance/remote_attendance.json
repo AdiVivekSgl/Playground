@@ -1,0 +1,47 @@
+{
+ "doctype": "DocType",
+ "name": "Remote Attendance",
+ "module": "Playground",
+ "custom": 0,
+ "engine": "InnoDB",
+ "autoname": "format:RA-{YYYY}-{#####}",
+ "in_create": 1,
+ "title_field": "full_name",
+ "search_fields": "user,employee,full_name",
+ "show_title_field_in_link": 1,
+ "sort_field": "timestamp",
+ "sort_order": "DESC",
+ "description": "One row per location message sent from the FTPL-Attendance page over WhatsApp (WA-AKG -> playground.api.whatsapp.handle_message). Created only by the WhatsApp endpoint, for the ERPNext User mapped to the sender's number in WhatsApp User.",
+ "field_order": [
+  "timestamp", "user", "full_name", "column_break_who", "employee", "employee_name", "phone",
+  "location_section", "latitude", "longitude", "accuracy", "low_accuracy", "column_break_loc", "map_link", "location",
+  "source_section", "source_message"
+ ],
+ "fields": [
+  {"fieldname": "timestamp", "fieldtype": "Datetime", "label": "Received At", "reqd": 1, "in_list_view": 1, "read_only": 1, "description": "When Frappe received the WhatsApp message (server time)."},
+  {"fieldname": "user", "fieldtype": "Link", "options": "User", "label": "ERPNext User", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1, "read_only": 1},
+  {"fieldname": "full_name", "fieldtype": "Data", "label": "Full Name", "fetch_from": "user.full_name", "read_only": 1},
+  {"fieldname": "column_break_who", "fieldtype": "Column Break"},
+  {"fieldname": "employee", "fieldtype": "Link", "options": "Employee", "label": "Employee", "in_standard_filter": 1, "read_only": 1, "description": "Active Employee whose User ID is this user, if any."},
+  {"fieldname": "employee_name", "fieldtype": "Data", "label": "Employee Name", "fetch_from": "employee.employee_name", "read_only": 1},
+  {"fieldname": "phone", "fieldtype": "Data", "label": "WhatsApp Number", "in_standard_filter": 1, "read_only": 1},
+
+  {"fieldname": "location_section", "fieldtype": "Section Break", "label": "Location"},
+  {"fieldname": "latitude", "fieldtype": "Float", "precision": "6", "label": "Latitude", "reqd": 1, "read_only": 1},
+  {"fieldname": "longitude", "fieldtype": "Float", "precision": "6", "label": "Longitude", "reqd": 1, "read_only": 1},
+  {"fieldname": "accuracy", "fieldtype": "Int", "label": "Accuracy (m)", "in_list_view": 1, "read_only": 1, "description": "As reported by the phone's browser (0 if the message didn't include it - Low Accuracy is then ticked)."},
+  {"fieldname": "low_accuracy", "fieldtype": "Check", "label": "Low Accuracy", "in_list_view": 1, "in_standard_filter": 1, "read_only": 1, "description": "Accuracy worse than 100 m (or not reported)."},
+  {"fieldname": "column_break_loc", "fieldtype": "Column Break"},
+  {"fieldname": "map_link", "fieldtype": "Data", "options": "URL", "label": "Map Link", "read_only": 1},
+  {"fieldname": "location", "fieldtype": "Geolocation", "label": "Map", "read_only": 1},
+
+  {"fieldname": "source_section", "fieldtype": "Section Break", "collapsible": 1, "label": "Source Message"},
+  {"fieldname": "source_message", "fieldtype": "Small Text", "label": "WhatsApp Message", "read_only": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "delete": 1, "report": 1, "export": 1},
+  {"role": "HR Manager", "read": 1, "report": 1, "export": 1},
+  {"role": "HR User", "read": 1, "report": 1, "export": 1},
+  {"role": "Employee", "read": 1, "if_owner": 1}
+ ]
+}

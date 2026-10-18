@@ -22,12 +22,14 @@ reads ERPNext data must require sender.user and apply that user's permissions
 import re
 from dataclasses import dataclass
 
+from playground.playground.whatsapp import attendance
 from playground.playground.whatsapp.stock import get_stock
 
 HELLO_REPLY = "Hello from Frontec ERP 👋"
 PING_REPLY = "pong"
 UNKNOWN_REPLY = "Frontec ERP is connected, but this command is not implemented yet."
 UNKNOWN_INTENT = "unknown"
+ATTENDANCE_INTENT = "attendance"
 
 # Trailing punctuation ignored on the command word, so "Hello!" still matches.
 _COMMAND_PUNCTUATION = ".,!?;:"
@@ -94,6 +96,10 @@ def parse_natural_language(message):
 
 
 def route(message, sender):
+	# The FTPL-Attendance page's prefilled message starts with "📍 FRONTEC
+	# ATTENDANCE", not a command word, so it is recognised by its marker.
+	if attendance.is_attendance_message(message):
+		return RouteResult(intent=ATTENDANCE_INTENT, reply=attendance.record_attendance(message, sender))
 	command, args = parse_natural_language(message) or parse_command(message)
 	handler = COMMANDS.get(command)
 	if handler is None:

@@ -58,7 +58,7 @@ class ConsolidatePairTest(unittest.TestCase):
 			api, "actions"
 		) as actions:
 			actions.move_stock.return_value = ["SE-1"]
-			actions.copy_masters.return_value = ["1 Item Price(s)"]
+			actions.copy_masters.return_value = (["1 Item Price(s)"], ["Item Alternative ALT-1 not moved: x"])
 			actions.replace_in_boms.return_value = (["BOM-1"], ["BOM-2: reason"])
 			result = api.consolidate_pair(doc, row("r1", "OLD", "KEEP"))
 
@@ -67,6 +67,7 @@ class ConsolidatePairTest(unittest.TestCase):
 		self.assertEqual(result["boms_updated"], "BOM-1")
 		self.assertIn("a warning", result["notes"])
 		self.assertIn("BOM-2", result["notes"])
+		self.assertIn("ALT-1", result["notes"])
 
 	def test_disabled_steps_are_skipped(self):
 		doc = fake_doc([], copy_masters=0, replace_in_boms=0, disable_old_items=0)
@@ -139,6 +140,7 @@ class RunConsolidationTest(unittest.TestCase):
 			api, "actions"
 		) as actions:
 			actions.move_stock.return_value = []
+			actions.copy_masters.return_value = ([], [])
 			actions.replace_in_boms.return_value = ([], [])
 			api.consolidate_pair(doc, row("r1", "OLD", "KEEP"))
 		self.assertFalse(check.call_args.kwargs["block_open_documents"])

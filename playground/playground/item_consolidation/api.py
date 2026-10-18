@@ -108,7 +108,9 @@ def consolidate_pair(doc, row):
 	stock_entries = actions.move_stock(
 		row.old_item, row.keep_item, doc.company, ctx.stock, ctx.old.stock_uom, doc.name
 	)
-	masters = actions.copy_masters(row.old_item, row.keep_item) if cint(doc.copy_masters) else []
+	masters, master_notes = (
+		actions.copy_masters(row.old_item, row.keep_item) if cint(doc.copy_masters) else ([], [])
+	)
 	boms_updated, boms_skipped = (
 		actions.replace_in_boms(row.old_item, row.keep_item, ctx.boms)
 		if cint(doc.replace_in_boms)
@@ -122,7 +124,11 @@ def consolidate_pair(doc, row):
 			open_documents=ctx.open_documents if cint(doc.disable_despite_open_documents) else None,
 		)
 
-	notes = list(ctx.warnings) + [_("BOM not updated - {0}").format(s) for s in boms_skipped]
+	notes = (
+		list(ctx.warnings)
+		+ list(master_notes)
+		+ [_("BOM not updated - {0}").format(s) for s in boms_skipped]
+	)
 	return {
 		"stock_entries": ", ".join(stock_entries),
 		"boms_updated": ", ".join(boms_updated),
@@ -160,7 +166,19 @@ def _pair_report(doc, row):
 			{"warehouse": s.warehouse, "qty": s.actual_qty, "value": s.stock_value} for s in ctx.stock
 		],
 		"boms": [b.bom for b in ctx.boms] if cint(doc.replace_in_boms) else [],
+		"alternatives": _alternative_labels(row.old_item) if cint(doc.copy_masters) else [],
 	}
+
+
+def _alternative_labels(item_code):
+	return [
+		"{0} → {1}".format(a.item_code, a.alternative_item_code)
+		for a in frappe.get_all(
+			"Item Alternative",
+			or_filters={"item_code": item_code, "alternative_item_code": item_code},
+			fields=["item_code", "alternative_item_code"],
+		)
+	]
 
 
 def _strip_html(text):

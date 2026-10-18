@@ -19,7 +19,8 @@ out of agreement.
 2. **Repack** (`actions.move_stock`) - one Repack Stock Entry per warehouse: old item
    out, same qty of the kept item in at the same value. No backdated repost.
 3. **Masters** - Item Prices, reorder levels, supplier/customer codes, Product
-   Bundles, Pricing Rules (only what the kept item lacks).
+   Bundles, Pricing Rules (only what the kept item lacks), and Item Alternatives
+   moved to the kept item - whether the old item is the item or the alternative.
 4. **BOMs** - reuses `bom_component_replace._replace_in_bom` on active/draft BOMs,
    then optionally queues "Update Cost" for all BOMs.
 5. **Disable** the old item with a "Replaced by" comment. History stays on it.
@@ -35,3 +36,4 @@ cannot be cancelled - undo a pair by cancelling its Repack entries.
 
     bench --site <site> run-tests --module playground.playground.item_consolidation.tests.test_checks
     bench --site <site> run-tests --module playground.playground.item_consolidation.tests.test_api
+    bench --site <site> run-tests --module playground.playground.item_consolidation.tests.test_actions

@@ -10,7 +10,8 @@ Consolidation steps for one old_item -> keep_item pair
                      the finished row from the consumed value, so stock value and
                      GL are unchanged and nothing is reposted into closed periods.
 2. copy_masters    - Item Price, reorder levels, supplier / customer item codes,
-                     Product Bundle and Pricing Rule rows (only what keep_item lacks).
+                     Product Bundle and Pricing Rule rows (only what keep_item lacks),
+                     and Item Alternatives moved from old_item to keep_item.
 3. replace_in_boms - reuses bom_component_replace._replace_in_bom on every active
                      or draft BOM using old_item.
 4. disable_item    - disabled = 1 plus a "Replaced by" comment. History stays on
@@ -65,7 +66,8 @@ def move_stock(old_item, keep_item, company, stock_rows, stock_uom, reference):
 
 
 def copy_masters(old_item, keep_item):
-	"""Copy pricing / planning masters keep_item does not already have. Returns a summary list."""
+	"""Copy pricing / planning masters keep_item does not already have and move its
+	Item Alternatives. Returns (summary list, skipped-record notes)."""
 	done = []
 
 	prices = _copy_item_prices(old_item, keep_item)
@@ -75,6 +77,12 @@ def copy_masters(old_item, keep_item):
 	keep = frappe.get_doc("Item", keep_item)
 	old = frappe.get_doc("Item", old_item)
 	changed = False
+	# Item Alternative refuses records on items without this flag, so carry it over
+	# before the alternatives are moved below.
+	if old.allow_alternative_item and not keep.allow_alternative_item:
+		keep.allow_alternative_item = 1
+		changed = True
+		done.append(_("Allow Alternative Item enabled"))
 	for table, key in ITEM_CHILD_TABLES:
 		existing = {_key(r, key) for r in keep.get(table)}
 		added = 0
@@ -97,7 +105,71 @@ def copy_masters(old_item, keep_item):
 	rules = _replace_in_parents("Pricing Rule", "Pricing Rule Item Code", old_item, keep_item, replace=False)
 	if rules:
 		done.append(_("Pricing Rule(s) {0}").format(", ".join(rules)))
-	return done
+
+	moved, skipped = transfer_item_alternatives(old_item, keep_item)
+	if moved:
+		done.append(_("Item Alternative(s) {0}").format(", ".join(moved)))
+	return done, skipped
+
+
+def transfer_item_alternatives(old_item, keep_item):
+	"""Re-point every Item Alternative that involves old_item - as the item or as
+	the alternative - to keep_item, in place (version history is kept).
+
+	A record is skipped, and left on old_item, when it would point keep_item at
+	itself, when keep_item already has the same alternative, or when ERPNext's own
+	Item Alternative validation refuses it (e.g. stock / batch / serial flags
+	differ). Returns (moved labels, skipped reasons)."""
+	moved, skipped = [], []
+	keep_name = frappe.db.get_value("Item", keep_item, "item_name")
+	names = frappe.get_all(
+		"Item Alternative",
+		or_filters={"item_code": old_item, "alternative_item_code": old_item},
+		pluck="name",
+	)
+	for name in names:
+		alt = frappe.get_doc("Item Alternative", name)
+		if alt.item_code == old_item:
+			side, name_field = "item_code", "item_name"
+			item_code, alternative = keep_item, alt.alternative_item_code
+		else:
+			side, name_field = "alternative_item_code", "alternative_item_name"
+			item_code, alternative = alt.item_code, keep_item
+		label = "{0} → {1}".format(item_code, alternative)
+
+		if item_code == alternative:
+			skipped.append(_("Item Alternative {0} not moved: it would make {1} its own alternative").format(name, keep_item))
+			continue
+		if _alternative_exists(item_code, alternative, exclude=name):
+			skipped.append(_("Item Alternative {0} not moved: {1} already exists").format(name, label))
+			continue
+
+		savepoint = "item_consolidation_alternative"
+		frappe.db.savepoint(savepoint)
+		try:
+			alt.set(side, keep_item)
+			alt.set(name_field, keep_name)
+			alt.save()
+		except Exception as e:
+			frappe.db.rollback(save_point=savepoint)
+			frappe.local.message_log = []
+			skipped.append(
+				_("Item Alternative {0} ({1}) not moved: {2}").format(name, label, frappe.utils.strip_html(str(e)))
+			)
+		else:
+			moved.append(label)
+	return moved, skipped
+
+
+def _alternative_exists(item_code, alternative, exclude=None):
+	"""Same pair already recorded, or covered by a two-way record in reverse."""
+	base = {"name": ["!=", exclude]} if exclude else {}
+	return bool(
+		frappe.db.exists("Item Alternative", dict(base, item_code=item_code, alternative_item_code=alternative))
+		or frappe.db.exists(
+			"Item Alternative", dict(base, item_code=alternative, alternative_item_code=item_code, two_way=1)
+		)
+	)
 
 
 def replace_in_boms(old_item, keep_item, boms):

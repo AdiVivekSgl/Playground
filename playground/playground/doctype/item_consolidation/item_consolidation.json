@@ -49,7 +49,7 @@
    "fieldtype": "Check",
    "label": "Copy Masters",
    "default": "1",
-   "description": "Item Prices, reorder levels, supplier/customer item codes, Product Bundles and Pricing Rules - only what the item to keep is missing."
+   "description": "Item Prices, reorder levels, supplier/customer item codes, Product Bundles and Pricing Rules - only what the item to keep is missing. Item Alternatives (either side) are moved to the item to keep."
   },
   {
    "fieldname": "replace_in_boms",

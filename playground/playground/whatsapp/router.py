@@ -22,7 +22,7 @@ reads ERPNext data must require sender.user and apply that user's permissions
 import re
 from dataclasses import dataclass
 
-from playground.playground.whatsapp import attendance
+from playground.playground.whatsapp import attendance, leave
 from playground.playground.whatsapp.stock import get_stock
 
 HELLO_REPLY = "Hello from Frontec ERP 👋"
@@ -30,6 +30,8 @@ PING_REPLY = "pong"
 UNKNOWN_REPLY = "Frontec ERP is connected, but this command is not implemented yet."
 UNKNOWN_INTENT = "unknown"
 ATTENDANCE_INTENT = "attendance"
+LEAVE_INTENT = "leave_request"
+CALENDAR_INTENT = "calendar"
 
 # Trailing punctuation ignored on the command word, so "Hello!" still matches.
 _COMMAND_PUNCTUATION = ".,!?;:"
@@ -75,6 +77,9 @@ COMMANDS = {
 	"hello": hello,
 	"ping": ping,
 	"stock": get_stock,  # stock XYZ-123
+	"menu": leave.menu,  # link to the FTPL-Attendance page
+	"leave": leave.menu,
+	"calendar": leave.calendar_link,  # secret leave calendar link
 }
 
 
@@ -96,10 +101,15 @@ def parse_natural_language(message):
 
 
 def route(message, sender):
-	# The FTPL-Attendance page's prefilled message starts with "📍 FRONTEC
-	# ATTENDANCE", not a command word, so it is recognised by its marker.
+	# The FTPL-Attendance page's prefilled messages ("📍 FRONTEC ATTENDANCE",
+	# "🌴 FRONTEC LEAVE REQUEST", "📅 FRONTEC LEAVE CALENDAR") don't start with
+	# a command word, so they are recognised by their markers.
 	if attendance.is_attendance_message(message):
 		return RouteResult(intent=ATTENDANCE_INTENT, reply=attendance.record_attendance(message, sender))
+	if leave.is_leave_request(message):
+		return RouteResult(intent=LEAVE_INTENT, reply=leave.request_leave(message, sender))
+	if leave.is_calendar_request(message):
+		return RouteResult(intent=CALENDAR_INTENT, reply=leave.calendar_link("", sender))
 	command, args = parse_natural_language(message) or parse_command(message)
 	handler = COMMANDS.get(command)
 	if handler is None:

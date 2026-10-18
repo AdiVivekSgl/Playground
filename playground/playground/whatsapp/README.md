@@ -9,6 +9,8 @@ WhatsApp → WA-AKG → wa_relay → POST handle_message → number→User mappi
 - Phase 3: **WhatsApp User** mapping (number → ERPNext User) and the first
   business query, `stock XYZ-123`. Unmapped numbers still only get `hello` / `ping`.
 - Remote attendance: the FTPL-Attendance page's location message → a **Remote Attendance** row.
+- Leave: the page's leave request → an HRMS **Leave Application** (Casual Leave), and a
+  read-only leave calendar page that needs no login.
 
 | Piece | Where |
 |---|---|
@@ -19,6 +21,8 @@ WhatsApp → WA-AKG → wa_relay → POST handle_message → number→User mappi
 | Run-as-user helper | `playground/playground/whatsapp/user_context.py` (`as_user`) |
 | `stock` command | `playground/playground/whatsapp/stock.py` |
 | Remote attendance | `playground/playground/whatsapp/attendance.py` → DocType **Remote Attendance** |
+| Leave request, calendar link, menu | `playground/playground/whatsapp/leave.py` → **Leave Application** |
+| Leave calendar page | `playground/www/leave_calendar.py` + `.html`, route `/leave-calendar` (hooks.py) |
 | Request log | DocType **WhatsApp Query Log** |
 | Tests | `playground/playground/whatsapp/tests/` |
 
@@ -102,6 +106,9 @@ Commands:
 | `ping` | no | `pong` |
 | `stock XYZ-123` | yes | Stock per warehouse — see [Stock command](#9-stock-command) |
 | `📍 FRONTEC ATTENDANCE` + map link | yes | Records a Remote Attendance row — see [Remote attendance](#9a-remote-attendance) |
+| `🌴 FRONTEC LEAVE REQUEST` + From/To | yes | Creates a Casual Leave application — see [Leave](#9b-leave-requests-and-leave-calendar) |
+| `📅 FRONTEC LEAVE CALENDAR` / `calendar` | yes | Secret link to the read-only leave calendar |
+| `menu` / `leave` | no | Link to the FTPL-Attendance page |
 | anything else | — | `Frontec ERP is connected, but this command is not implemented yet.` |
 
 Business errors (unmapped number, no permission, unknown item) are normal
@@ -302,6 +309,69 @@ read/report/export; a user with the **Employee** role sees only their own rows
 **Limits:** the location is self-reported. The employee can edit the text
 before sending, so treat it as a declaration, not proof of where they were.
 
+## 9b. Leave requests and leave calendar
+
+The [FTPL-Attendance page](https://adiviveksgl.github.io/FTPL-Attendance/) has
+three options: **Mark Attendance** (9a), **Request Leave** and **Leave
+Calendar**. Anyone can get the page link by sending `menu` (or `leave`).
+
+**Request Leave** opens a calendar popup: tap the first day, then the last
+(one tap = a single day). The page then prepares:
+
+```
+🌴 FRONTEC LEAVE REQUEST
+Leave Type: Casual Leave
+From: 2026-10-20 (Tue)
+To: 2026-10-22 (Thu)
+```
+
+`leave.request_leave` creates an HRMS **Leave Application**:
+
+| Field | Value |
+|---|---|
+| Employee, Company | Active Employee whose **User ID** is the sender's mapped user — never taken from the message |
+| Leave Type | Always **Casual Leave** (whatever the message says) |
+| From / To Date | From the message (ISO dates); end ≥ start, at most 60 days, start ≤ 30 days ago, end ≤ 1 year ahead |
+| Leave Approver | HRMS `get_leave_approver` (Employee, else Department) |
+| Status | Open (draft) — approved/rejected in the desk as usual |
+| Reason | `Requested on WhatsApp from <number>` |
+
+The insert runs **as the mapped user with normal permissions** (no
+`ignore_permissions`), so HRMS' own rules apply: leave balance, overlapping
+applications, holidays, leave approver mandatory, approver notifications.
+If HRMS refuses, its message is sent back ("not accepted: Employee … has
+already applied …") and a savepoint rollback leaves nothing behind. The reply
+on success:
+
+```
+✅ Leave requested - *Ravi Kumar*
+🌴 Casual Leave: 20-10-2026 → 22-10-2026 (3 days)
+📄 HR-LAP-2026-00012 - status *Open*, waiting for Priya Shah
+```
+
+The day count is HRMS' `total_leave_days`. A forwarded leave message just
+becomes a request *for the forwarder* (the employee always comes from the
+sender's number), and resending the same dates is caught by HRMS' overlap check.
+
+**Leave Calendar** sends `📅 FRONTEC LEAVE CALENDAR`; the bot replies (mapped
+numbers only) with `https://<site>/leave-calendar?key=<leave_calendar_key>`.
+That page (`playground/www/leave_calendar.py`) needs **no login**: a month
+view (Mon–Sun, ‹ Today › navigation) of **Open and Approved** leave showing
+only employee name, leave type, half day and status — no reasons, balances or
+approvers. The desk calendar (`/app/leave-application/view/calendar/default`)
+can't be used for this: Frappe sends every Guest in `/app` to the login page.
+
+Setup (site config, like `wa_akg_secret`):
+
+| Key | Meaning |
+|---|---|
+| `leave_calendar_key` | Long random string. Unset → the page shows "link invalid" to everyone and the bot says the calendar isn't set up. Change it to revoke every link handed out so far. |
+| `ftpl_attendance_url` | Optional; the page link `menu` sends (default `https://adiviveksgl.github.io/FTPL-Attendance/`). |
+
+The key is never in the (public) page source — it only exists in site config
+and in the bot's replies, so treat the link like a password and rotate the key
+when someone leaves.
+
 ## 10. Permission model
 
 - WA-AKG can call exactly one method. There is no route from WhatsApp text to
@@ -360,4 +430,5 @@ bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.t
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_router
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_stock
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_attendance
+bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_leave
 ```

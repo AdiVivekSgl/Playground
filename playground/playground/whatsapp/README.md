@@ -353,9 +353,18 @@ The day count is HRMS' `total_leave_days`. A forwarded leave message just
 becomes a request *for the forwarder* (the employee always comes from the
 sender's number), and resending the same dates is caught by HRMS' overlap check.
 
-**Leave Calendar** sends `📅 FRONTEC LEAVE CALENDAR`; the bot replies (mapped
-numbers only) with `https://<site>/leave-calendar?key=<leave_calendar_key>`.
-That page (`playground/www/leave_calendar.py`) needs **no login**: a month
+**Leave Calendar** opens `https://<site>/leave-calendar?key=<leave_calendar_key>`
+directly when the page knows the key; otherwise it sends `📅 FRONTEC LEAVE
+CALENDAR` and the bot replies (mapped numbers only) with the calendar link.
+
+How the page learns the key: for mapped numbers, the page link in the `menu`
+and calendar replies is `<page>#k=<key>`. The `#fragment` is never sent to
+GitHub Pages; the page saves the key in the phone's browser storage and strips
+it from the address bar. After opening the page once from that link, the
+button goes straight to the calendar. After a key rotation the old key shows
+"link invalid" — send `calendar` again and open the new page link.
+
+The calendar page (`playground/www/leave_calendar.py`) needs **no login**: a month
 view (Mon–Sun, ‹ Today › navigation) of **Open and Approved** leave showing
 only employee name, leave type, half day and status — no reasons, balances or
 approvers. The desk calendar (`/app/leave-application/view/calendar/default`)
@@ -368,9 +377,9 @@ Setup (site config, like `wa_akg_secret`):
 | `leave_calendar_key` | Long random string. Unset → the page shows "link invalid" to everyone and the bot says the calendar isn't set up. Change it to revoke every link handed out so far. |
 | `ftpl_attendance_url` | Optional; the page link `menu` sends (default `https://adiviveksgl.github.io/FTPL-Attendance/`). |
 
-The key is never in the (public) page source — it only exists in site config
-and in the bot's replies, so treat the link like a password and rotate the key
-when someone leaves.
+The key is never in the (public) page source — it only exists in site config,
+the bot's replies and the browser storage of phones that opened the page link,
+so treat the links like a password and rotate the key when someone leaves.
 
 ## 10. Permission model
 

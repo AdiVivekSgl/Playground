@@ -210,6 +210,15 @@ class TestCalendarAndMenu(LeaveTestCase):
 		with self.fake(conf={"leave_calendar_key": "s3cr3t"}):
 			reply = leave.calendar_link("", MAPPED)
 		self.assertIn("https://livefrontec.frappe.cloud/leave-calendar?key=s3cr3t", reply)
+		self.assertIn(leave.DEFAULT_PAGE_URL + "#k=s3cr3t", reply)
+
+	def test_page_link_carries_key_only_for_mapped_senders(self):
+		with self.fake(conf={"leave_calendar_key": "s3cr3t", "ftpl_attendance_url": "https://example.test/ftpl/#old"}):
+			self.assertEqual(leave.page_url(MAPPED), "https://example.test/ftpl/#k=s3cr3t")
+			self.assertIn("https://example.test/ftpl/#k=s3cr3t", leave.menu("", MAPPED))
+			self.assertNotIn("s3cr3t", leave.menu("", UNMAPPED))
+		with self.fake():  # no key configured
+			self.assertEqual(leave.page_url(MAPPED), leave.DEFAULT_PAGE_URL)
 
 	def test_calendar_link_refused_or_off(self):
 		with self.fake(conf={"leave_calendar_key": "s3cr3t"}):

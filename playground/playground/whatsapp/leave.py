@@ -70,7 +70,12 @@ REQUESTED_REPLY = (
 	"🌴 {leave_type}: {from_date} → {to_date} ({days} day{s})\n"
 	"📄 {application} - status *{status}*{approver}"
 )
-CALENDAR_REPLY = "📅 Frontec leave calendar (read-only, no login needed):\n{url}\n\nPlease don't share this link outside Frontec."
+CALENDAR_REPLY = (
+	"📅 Frontec leave calendar (read-only, no login needed):\n{url}\n\n"
+	"Open the Frontec Attendance page once from this link and its *Leave Calendar* button "
+	"will open the calendar directly from then on:\n{page_url}\n\n"
+	"Please don't share these links outside Frontec."
+)
 CALENDAR_OFF_REPLY = "Sorry, the leave calendar is not set up yet. Please ask your ERPNext administrator."
 MENU_REPLY = (
 	"👋 Frontec Attendance & Leave\n"
@@ -189,12 +194,27 @@ def calendar_link(args, sender):
 	key = frappe.conf.get(CALENDAR_KEY_CONF)
 	if not key:
 		return CALENDAR_OFF_REPLY
-	return CALENDAR_REPLY.format(url=get_url(CALENDAR_ROUTE) + "?" + urlencode({"key": key}))
+	return CALENDAR_REPLY.format(url=get_url(CALENDAR_ROUTE) + "?" + urlencode({"key": key}), page_url=page_url(sender))
 
 
 def menu(args, sender):
 	"""`menu` / `leave`: the link to the FTPL-Attendance page."""
-	return MENU_REPLY.format(url=frappe.conf.get(PAGE_URL_CONF) or DEFAULT_PAGE_URL)
+	return MENU_REPLY.format(url=page_url(sender))
+
+
+def page_url(sender):
+	"""The FTPL-Attendance page link; for mapped senders it carries the calendar key.
+
+	The key goes in the #fragment, which browsers never send to the page's host
+	(the page is public on GitHub Pages). The page saves it on the phone and
+	strips it from the address bar, so its Leave Calendar button can open
+	/leave-calendar directly instead of asking over WhatsApp.
+	"""
+	url = frappe.conf.get(PAGE_URL_CONF) or DEFAULT_PAGE_URL
+	key = frappe.conf.get(CALENDAR_KEY_CONF)
+	if not (sender and sender.user and key):
+		return url
+	return url.split("#", 1)[0] + "#" + urlencode({"k": key})
 
 
 def calendar_key_is_valid(provided):

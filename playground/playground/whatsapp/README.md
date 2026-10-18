@@ -8,6 +8,7 @@ WhatsApp → WA-AKG → wa_relay → POST handle_message → number→User mappi
 - Phase 2: `wa_relay/` container between WA-AKG and Frappe.
 - Phase 3: **WhatsApp User** mapping (number → ERPNext User) and the first
   business query, `stock XYZ-123`. Unmapped numbers still only get `hello` / `ping`.
+- Remote attendance: the FTPL-Attendance page's location message → a **Remote Attendance** row.
 
 | Piece | Where |
 |---|---|
@@ -17,6 +18,7 @@ WhatsApp → WA-AKG → wa_relay → POST handle_message → number→User mappi
 | Intent router | `playground/playground/whatsapp/router.py` (`COMMANDS`, `parse_natural_language`) |
 | Run-as-user helper | `playground/playground/whatsapp/user_context.py` (`as_user`) |
 | `stock` command | `playground/playground/whatsapp/stock.py` |
+| Remote attendance | `playground/playground/whatsapp/attendance.py` → DocType **Remote Attendance** |
 | Request log | DocType **WhatsApp Query Log** |
 | Tests | `playground/playground/whatsapp/tests/` |
 
@@ -99,6 +101,7 @@ Commands:
 | `hello` / `Hello` / `Hello!` | no | `Hello from Frontec ERP 👋` |
 | `ping` | no | `pong` |
 | `stock XYZ-123` | yes | Stock per warehouse — see [Stock command](#9-stock-command) |
+| `📍 FRONTEC ATTENDANCE` + map link | yes | Records a Remote Attendance row — see [Remote attendance](#9a-remote-attendance) |
 | anything else | — | `Frontec ERP is connected, but this command is not implemented yet.` |
 
 Business errors (unmapped number, no permission, unknown item) are normal
@@ -233,6 +236,60 @@ In stock: *120.5* Nos
   visible to that user** → "Item *X* not found" (the two are deliberately
   indistinguishable); non-stock item → "is not a stock item".
 
+## 9a. Remote attendance
+
+The [FTPL-Attendance](https://github.com/AdiVivekSgl/FTPL-Attendance) page reads
+the phone's GPS and opens WhatsApp to the Frontec number with this text prefilled:
+
+```
+📍 FRONTEC ATTENDANCE
+Location: https://www.google.com/maps?q=17.385044,78.486671
+Accuracy: 12m
+```
+
+When the employee taps **Send**, any message containing `FRONTEC ATTENDANCE`
+(case-insensitive, anywhere in the text) is routed to
+`attendance.record_attendance` (intent `attendance`) instead of the command
+router, and creates one **Remote Attendance** row:
+
+| Field | From |
+|---|---|
+| Received At | Server time when Frappe got the message (the page sends no time) |
+| ERPNext User / Full Name | The sender's **WhatsApp User** mapping |
+| Employee | Active Employee whose **User ID** is that user (blank if none) |
+| Latitude / Longitude | The `q=lat,lon` of the map link (must be valid coordinates) |
+| Accuracy (m), Low Accuracy | `Accuracy: Nm`; Low Accuracy is ticked above 100 m or when missing |
+| Map Link, Map | Normalised Google Maps link and a Geolocation point (map view on the form) |
+| WhatsApp Message | The raw text (first 1000 characters) |
+
+There is no IN/OUT: every message is its own row.
+
+Reply:
+
+```
+✅ Attendance recorded for *Ravi Kumar*
+🕒 18-10-2026 09:12
+📍 17.385044, 78.486671 (±12 m)
+```
+
+plus a "location accuracy is low" note when flagged. Unmapped number → "not
+linked, nothing recorded"; marker but no readable coordinates → "couldn't read
+a location, nothing recorded".
+
+**Who sees what:** rows are created only by this handler (`in_create`; nobody
+can add or edit one in the desk). System Manager, HR Manager and HR User can
+read/report/export; a user with the **Employee** role sees only their own rows
+(they are inserted as the mapped user, so that user is the owner).
+
+**Before rollout:**
+- Each employee's number needs a **WhatsApp User** row, and that User should be
+  set as **User ID** on their Employee record.
+- `wa_relay`'s `ALLOWED_NUMBERS` must include the employees' numbers (or be empty).
+- `ATTENDANCE_NUMBER` in the page must be the WA-AKG gateway's own number.
+
+**Limits:** the location is self-reported. The employee can edit the text
+before sending, so treat it as a declaration, not proof of where they were.
+
 ## 10. Permission model
 
 - WA-AKG can call exactly one method. There is no route from WhatsApp text to
@@ -290,4 +347,5 @@ bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.t
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_phone
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_router
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_stock
+bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_attendance
 ```

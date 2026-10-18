@@ -41,11 +41,16 @@ function icn_render_preview(reports) {
 			const boms = r.boms.length
 				? `<div class="small">${__("BOMs to update")}: ${r.boms.map(icn_esc).join(", ")}</div>`
 				: "";
+			const alternatives = (r.alternatives || []).length
+				? `<div class="small">${__("Item Alternatives to move")}: ${r.alternatives
+						.map(icn_esc)
+						.join(", ")}</div>`
+				: "";
 			return `<div style="border-bottom:1px solid var(--border-color);padding:8px 0;">
 				<div><b>${__("Row")} ${r.idx}: ${icn_esc(r.old_item)} → ${icn_esc(r.keep_item)}</b> ${badge}</div>
 				${icn_list(r.blockers, "text-danger")}
 				${icn_list(r.warnings, "text-warning")}
-				${stock}${boms}
+				${stock}${boms}${alternatives}
 			</div>`;
 		})
 		.join("");

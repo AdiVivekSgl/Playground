@@ -1,0 +1,86 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Frontec Leave Calendar{% endblock %}
+
+{% block head_include %}
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+{% endblock %}
+
+{% block style %}
+<style>
+	.lc { max-width: 760px; margin: 0 auto; padding: 16px 12px 40px; }
+	.lc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+	.lc-head h1 { font-size: 22px; margin: 0; }
+	.lc-nav a { display: inline-block; padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; text-decoration: none; color: inherit; }
+	.lc-sub { color: #6b7280; font-size: 14px; margin: 0 0 12px; }
+	.lc-grid { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 20px; }
+	.lc-grid th { font-size: 12px; color: #6b7280; padding: 4px 0; font-weight: 600; }
+	.lc-grid td { border: 1px solid #e5e7eb; height: 52px; vertical-align: top; padding: 4px; font-size: 13px; }
+	.lc-grid td.out { color: #d1d5db; background: #fafafa; }
+	.lc-grid td.we { background: #f9fafb; }
+	.lc-grid td.today { outline: 2px solid #128C7E; outline-offset: -2px; }
+	.lc-count { display: inline-block; margin-top: 4px; min-width: 22px; padding: 1px 6px; border-radius: 10px; background: #128C7E; color: #fff; font-size: 12px; text-align: center; }
+	.lc-day { border-top: 1px solid #e5e7eb; padding: 10px 0; }
+	.lc-day h2 { font-size: 15px; margin: 0 0 6px; }
+	.lc-day.today h2 { color: #128C7E; }
+	.lc-day ul { list-style: none; margin: 0; padding: 0; }
+	.lc-day li { padding: 3px 0; font-size: 14px; }
+	.lc-tag { font-size: 12px; padding: 1px 6px; border-radius: 6px; margin-left: 4px; }
+	.lc-tag.Approved { background: #dcfce7; color: #166534; }
+	.lc-tag.Open { background: #fef3c7; color: #92400e; }
+	.lc-empty, .lc-invalid { color: #6b7280; padding: 24px 0; text-align: center; }
+</style>
+{% endblock %}
+
+{% block page_content %}
+<main class="lc">
+{% if not valid %}
+	<div class="lc-invalid">
+		<h1>Leave Calendar</h1>
+		<p>This link is invalid or has expired. Send <b>calendar</b> to the Frontec WhatsApp number for a new one.</p>
+	</div>
+{% else %}
+	<div class="lc-head">
+		<h1>🌴 {{ title }}</h1>
+		<div class="lc-nav">
+			<a href="{{ prev_url | e }}" aria-label="Previous month">‹</a>
+			<a href="{{ today_url | e }}">Today</a>
+			<a href="{{ next_url | e }}" aria-label="Next month">›</a>
+		</div>
+	</div>
+	<p class="lc-sub">Open and approved leave · {{ people }} {{ "person" if people == 1 else "people" }} this month · read-only</p>
+
+	<table class="lc-grid">
+		<thead><tr>{% for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] %}<th>{{ d }}</th>{% endfor %}</tr></thead>
+		<tbody>
+		{% for week in weeks %}
+			<tr>
+			{% for day in week %}
+				<td class="{{ 'out' if not day.in_month }}{{ ' we' if day.is_weekend and day.in_month }}{{ ' today' if day.is_today }}">
+					{{ day.day }}
+					{% if day.count %}<br><span class="lc-count" title="{{ day.count }} on leave">{{ day.count }}</span>{% endif %}
+				</td>
+			{% endfor %}
+			</tr>
+		{% endfor %}
+		</tbody>
+	</table>
+
+	{% if agenda %}
+		{% for day in agenda %}
+		<section class="lc-day{{ ' today' if day.is_today }}">
+			<h2>{{ day.label }}{{ " · today" if day.is_today }}</h2>
+			<ul>
+			{% for lv in day.leaves %}
+				<li>{{ lv.employee_name | e }} - {{ lv.leave_type | e }}{{ " (half day)" if lv.half_day }}<span class="lc-tag {{ lv.status | e }}">{{ lv.status | e }}</span></li>
+			{% endfor %}
+			</ul>
+		</section>
+		{% endfor %}
+	{% else %}
+		<p class="lc-empty">No open or approved leave this month.</p>
+	{% endif %}
+{% endif %}
+</main>
+{% endblock %}

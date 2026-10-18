@@ -262,3 +262,9 @@ after_migrate = [
 default_log_clearing_doctypes = {
 	"WhatsApp Query Log": 90,
 }
+
+# Read-only leave calendar for the WhatsApp leave flow: /leave-calendar?key=...
+# (playground/www/leave_calendar.py, guarded by leave_calendar_key in site config).
+website_route_rules = [
+	{"from_route": "/leave-calendar", "to_route": "leave_calendar"},
+]

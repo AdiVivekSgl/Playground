@@ -20,6 +20,7 @@ WhatsApp → WA-AKG → wa_relay → POST handle_message → number→User mappi
 | Intent router | `playground/playground/whatsapp/router.py` (`COMMANDS`, `parse_natural_language`) |
 | Run-as-user helper | `playground/playground/whatsapp/user_context.py` (`as_user`) |
 | `stock` command | `playground/playground/whatsapp/stock.py` |
+| `lead` command | `playground/playground/whatsapp/lead.py` |
 | Remote attendance | `playground/playground/whatsapp/attendance.py` → DocType **Remote Attendance** |
 | Leave request, calendar link, menu | `playground/playground/whatsapp/leave.py` → **Leave Application** |
 | Leave calendar page | `playground/www/leave_calendar.py` + `.html`, route `/leave-calendar` (hooks.py) |
@@ -105,6 +106,7 @@ Commands:
 | `hello` / `Hello` / `Hello!` | no | `Hello from Frontec ERP 👋` |
 | `ping` | no | `pong` |
 | `stock XYZ-123` | yes | Stock per warehouse — see [Stock command](#9-stock-command) |
+| `lead Name; phone; email; notes` | yes | Creates a Lead — see [Create a lead](#9c-create-a-lead) |
 | `📍 FRONTEC ATTENDANCE` + map link | yes | Records a Remote Attendance row — see [Remote attendance](#9a-remote-attendance) |
 | `🌴 FRONTEC LEAVE REQUEST` + From/To | yes | Creates a Casual Leave application — see [Leave](#9b-leave-requests-and-leave-calendar) |
 | `📅 FRONTEC LEAVE CALENDAR` / `calendar` | yes | Secret link to the read-only leave calendar |
@@ -381,6 +383,50 @@ The key is never in the (public) page source — it only exists in site config,
 the bot's replies and the browser storage of phones that opened the page link,
 so treat the links like a password and rotate the key when someone leaves.
 
+## 9c. Create a lead
+
+```
+lead Aditya Saigal; +919811546751; adisag@gmail.com; CEO and MD of Frontec, they make cable joints
+```
+
+Parts are separated by `;` (or new lines). The **first part is the name** (first
+word → First Name, the rest → Last Name). After that, each part is recognised
+by its shape, in any order:
+
+| Part | Goes to |
+|---|---|
+| an e-mail address | **Email** (lower-cased) |
+| a phone number (any format, e.g. `+91 98115 46751`, `09811546751`) | **Mobile No**, saved as `+919811546751` |
+| `company: Acme Cables` / `org: …` | **Organization Name** |
+| `title: Buyer` / `designation: …` | **Job Title** |
+| `note: …` or anything else | a **Note** on the Lead (Notes tab; timeline comment on older ERPNext) |
+
+No LLM — nothing is guessed from free text, so "CEO of Frontec" stays in the
+note rather than filling Company/Title; use the labels for those.
+
+Reply:
+
+```
+✅ Lead created - *CRM-LEAD-2026-00042*
+👤 Aditya Saigal
+📞 +919811546751
+✉️ adisag@gmail.com
+📝 CEO and MD of Frontec, they make cable joints
+https://YOUR-SITE/app/lead/CRM-LEAD-2026-00042
+```
+
+- Inserted **as the mapped user** with a normal permission-checked insert: the
+  user needs **create** on Lead (Sales User / Sales Manager have it) and becomes
+  the Lead Owner. No `ignore_permissions`.
+- ERPNext's own validation applies, and its message is passed back — e.g. a
+  duplicate e-mail gives "Sorry, the lead was not created: Email Address must be
+  unique…". A rejected insert is rolled back to a savepoint, so nothing half-made
+  is left.
+- Refused before anything is written: unmapped number, no name, the first part
+  being an e-mail/phone, two different e-mails or phones, an invalid labelled
+  e-mail/phone, name over 140 or notes over 2000 characters. `lead` on its own
+  replies with the usage.
+
 ## 10. Permission model
 
 - WA-AKG can call exactly one method. There is no route from WhatsApp text to
@@ -438,6 +484,7 @@ bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.t
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_phone
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_router
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_stock
+bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_lead
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_attendance
 bench --site YOUR-SITE run-tests --module playground.playground.whatsapp.tests.test_leave
 ```

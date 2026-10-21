@@ -22,7 +22,7 @@ reads ERPNext data must require sender.user and apply that user's permissions
 import re
 from dataclasses import dataclass
 
-from playground.playground.whatsapp import attendance, leave
+from playground.playground.whatsapp import attendance, lead, leave
 from playground.playground.whatsapp.stock import get_stock
 
 HELLO_REPLY = "Hello from Frontec ERP 👋"
@@ -77,6 +77,7 @@ COMMANDS = {
 	"hello": hello,
 	"ping": ping,
 	"stock": get_stock,  # stock XYZ-123
+	"lead": lead.create_lead,  # lead Name; phone; email; notes
 	"menu": leave.menu,  # link to the FTPL-Attendance page
 	"leave": leave.menu,
 	"calendar": leave.calendar_link,  # secret leave calendar link

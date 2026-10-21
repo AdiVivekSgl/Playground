@@ -5,13 +5,19 @@
 {% block head_include %}
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@400;700&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
 {% endblock %}
 
 {% block style %}
 <style>
-	.lc { max-width: 760px; margin: 0 auto; padding: 16px 12px 40px; }
-	.lc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
-	.lc-head h1 { font-size: 22px; margin: 0; }
+	/* Frontec design language (frontec.co.in): red #DA251C, Montserrat headings, Bitter text. */
+	.lc { max-width: 760px; margin: 0 auto; padding: 16px 12px 40px; font-family: "Bitter", Georgia, serif; color: #1F2020; }
+	.lc h1, .lc h2, .lc-nav a, .lc-grid th, .lc-count, .lc-tag { font-family: "Montserrat", Arial, sans-serif; }
+	.lc-head { border-bottom: 3px solid #DA251C; padding-bottom: 10px; }
+	.lc-nav a:hover { border-color: #DA251C; color: #DA251C; }
+	.lc-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+	.lc-nav { display: flex; gap: 6px; flex: none; }
+	.lc-head h1 { font-size: 20px; margin: 0; white-space: nowrap; }
 	.lc-nav a { display: inline-block; padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; text-decoration: none; color: inherit; }
 	.lc-sub { color: #6b7280; font-size: 14px; margin: 0 0 12px; }
 	.lc-grid { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 20px; }
@@ -19,16 +25,16 @@
 	.lc-grid td { border: 1px solid #e5e7eb; height: 52px; vertical-align: top; padding: 4px; font-size: 13px; }
 	.lc-grid td.out { color: #d1d5db; background: #fafafa; }
 	.lc-grid td.we { background: #f9fafb; }
-	.lc-grid td.today { outline: 2px solid #128C7E; outline-offset: -2px; }
-	.lc-count { display: inline-block; margin-top: 4px; min-width: 22px; padding: 1px 6px; border-radius: 10px; background: #128C7E; color: #fff; font-size: 12px; text-align: center; }
+	.lc-grid td.today { outline: 2px solid #DA251C; outline-offset: -2px; }
+	.lc-count { display: inline-block; margin-top: 4px; min-width: 22px; padding: 1px 6px; border-radius: 10px; background: #DA251C; color: #fff; font-size: 12px; text-align: center; }
 	.lc-day { border-top: 1px solid #e5e7eb; padding: 10px 0; }
 	.lc-day h2 { font-size: 15px; margin: 0 0 6px; }
-	.lc-day.today h2 { color: #128C7E; }
+	.lc-day.today h2 { color: #DA251C; }
 	.lc-day ul { list-style: none; margin: 0; padding: 0; }
 	.lc-day li { padding: 3px 0; font-size: 14px; }
 	.lc-tag { font-size: 12px; padding: 1px 6px; border-radius: 6px; margin-left: 4px; }
-	.lc-tag.Approved { background: #dcfce7; color: #166534; }
-	.lc-tag.Open { background: #fef3c7; color: #92400e; }
+	.lc-tag.Approved { background: #FBE4E3; color: #B81E17; }
+	.lc-tag.Open { background: #F2F2F2; color: #5F6368; border: 1px solid #DADCE0; }
 	.lc-empty, .lc-invalid { color: #6b7280; padding: 24px 0; text-align: center; }
 </style>
 {% endblock %}

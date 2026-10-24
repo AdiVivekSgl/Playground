@@ -20,6 +20,9 @@ the plan, each issue with deep links to fix it:
     end_of_life    - item is past its end-of-life date
     no_uom         - item has no stock UOM
     item_missing   - item code not found
+    bom_loop       - a BOM contains an item that is already above it in the
+                     tree (A > B > A): the nested chain would never end
+    too_deep       - BOM nesting deeper than MAX_DEPTH levels below the FG
   Warnings (the plan builds, the workbook is less useful):
     no_rate            - no valuation / last purchase rate (costs show as 0)
     no_supplier        - purchased item with no default supplier
@@ -175,13 +178,53 @@ class _Checker:
 				if not child.is_stock_item:
 					continue
 				if is_manufacture:
-					keys = keys | self._walk(r.item_code, child_path)
+					if r.item_code in self.stack:
+						# This BOM points back at an item above it: the chain would nest
+						# forever (frontec: "Hierarchy exceeds maximum depth").
+						keys = keys | {self._loop_issue(item, bom, r.item_code, path)}
+					elif len(child_path) > MAX_DEPTH + 1:
+						# The FG is the root plan; child plan level n holds path[n], so
+						# path index MAX_DEPTH + 1 would need one level too many.
+						keys = keys | {
+							self._add(
+								BLOCKER,
+								"too_deep",
+								item,
+								path,
+								_("BOM nesting goes deeper than {0} levels below the finished good").format(MAX_DEPTH),
+								[
+									{"label": _("Open BOM {0}").format(bom), "route": form_route("BOM", bom)},
+									self._open_item(item),
+								],
+							)
+						}
+					else:
+						keys = keys | self._walk(r.item_code, child_path)
 				elif child.default_material_request_type == "Purchase":
 					self.purchase_items.add(r.item_code)
 
 		self.stack.discard(item)
 		self.memo[item] = keys
 		return keys
+
+	def _loop_issue(self, item, bom, back_to, path):
+		"""Blocker for a BOM loop: `item`'s BOM `bom` contains `back_to`, which is
+		already on the walk `path` above it. Reported on `item` (whose BOM needs
+		the fix), with the loop spelled out, e.g. "A > B > C > A"."""
+		loop = path[path.index(back_to):] + [back_to] if back_to in path else [item, back_to]
+		return self._add(
+			BLOCKER,
+			"bom_loop",
+			item,
+			path + [back_to],
+			_("BOM loop: {0} — BOM {1} of {2} contains {3}, which is already above it").format(
+				" > ".join(loop), bom, item, back_to
+			),
+			[
+				{"label": _("Open BOM {0}").format(bom), "route": form_route("BOM", bom)},
+				self._open_item(item),
+			],
+		)
 
 	def _check_plannable(self, item, path):
 		"""Blocker keys for `item` itself as a plan row (an FG on the root plan, or a

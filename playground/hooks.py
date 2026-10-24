@@ -53,6 +53,11 @@ doctype_list_js = {
 # overrides Purchase Invoice, merge that logic instead of setting this.
 override_doctype_class = {
 	"Purchase Invoice": "playground.playground.overrides.purchase_invoice.CustomPurchaseInvoice",
+	# Incoming FG Valuation from Mfg: value a Manufacture entry's FG per the Item
+	# setting (Std / Current / Fixed) and post the difference to the Company's
+	# Manufacturing Valuation Variance account (see
+	# playground/playground/overrides/stock_entry.py). Same one-owner caveat.
+	"Stock Entry": "playground.playground.overrides.stock_entry.CustomStockEntry",
 }
 
 # Purchase Receipt Connections: surface the Material Transfer Stock Entry created
@@ -211,6 +216,10 @@ doc_events = {
 	"Communication": {
 		"after_insert": "playground.playground.rfq_intake.handler.on_email",
 	},
+	# Incoming FG Valuation from Mfg: "Fixed / Manual" needs a rate > 0.
+	"Item": {
+		"validate": "playground.playground.fg_valuation.valuation.validate_item",
+	},
 }
 
 scheduler_events = {
@@ -254,6 +263,9 @@ after_migrate = [
 	"playground.playground.erp_backup.setup.setup_erp_backup",
 	# RFQ Intake: create the "Email Intake" custom fields on Opportunity (idempotent).
 	"playground.playground.rfq_intake.setup.setup_rfq_intake",
+	# Incoming FG Valuation from Mfg: Item method/rate, Company variance account and
+	# the Stock Entry audit fields (idempotent).
+	"playground.playground.fg_valuation.setup.setup_fg_valuation",
 ]
 
 # WA-AKG WhatsApp integration: Log Settings prunes WhatsApp Query Log rows older

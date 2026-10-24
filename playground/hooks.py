@@ -151,6 +151,29 @@ fixtures = [
 			]],
 		],
 	},
+	# Print formats that were built directly on the live site and are set as
+	# DocType defaults / called from code (frontec's FTPL-Dispatch Set uses
+	# "DT - Guarantee Certificate"; the Sales Invoice dispatch email attaches
+	# "Frontec - GST Invoice (Extra)"). Listed by name so `bench export-fixtures`
+	# brings them under version control. Once exported, `bench migrate` re-syncs them
+	# from playground/fixtures/print_format.json, so edit them here, not in the UI.
+	{
+		"doctype": "Print Format",
+		"filters": [
+			["name", "in", [
+				"SDI",
+				"FTPL - Packing List Consolidated",
+				"Quotation-Frontec",
+				"Blanket Order-Frontec",
+				"Purchase Print",
+				"DT Work Order",
+				"FTPL-Inspection Call",
+				"DT - Guarantee Certificate",
+				"Frontec - GST Invoice (Extra)",
+				"Stock Entry",
+			]],
+		],
+	},
 ]
 
 # First doc_events / scheduler_events in this app - drives Sales Order Material

@@ -950,7 +950,9 @@ def _build_item_requirement_sheet(wb, mr_rows):
 
     Reserved against Open WO and Projected Incoming from Open WO are fetched from
     open Work Orders (see the two _*_open_wo_map helpers); Safety Stock is
-    Item.safety_stock; everything else comes off the Material Request Plan Items.
+    Item.safety_stock; Origin BOMs lists the BOMs on that level's plan that call
+    for the item (see _origin_boms_map), so each Qty As Per BOM can be traced;
+    everything else comes off the Material Request Plan Items.
     This is the default item-requirement view (it replaced the former separate
     "BOM Levels" + "logic" pair once the logic was validated). Only the Shortage
     column is a live formula, so the fetched columns (incl. Safety Stock) can be
@@ -968,6 +970,7 @@ def _build_item_requirement_sheet(wb, mr_rows):
         "Shortage",                         # I  (formula)
         "Inventory Rate",                   # J  (STOCK_WAREHOUSE valuation rate — same as sheet 2 col G)
         "Safety Stock",                     # K  (Item.safety_stock, added to the Shortage)
+        "Origin BOMs",                      # L  (BOMs on this level's plan that call for the item)
     ]
     _write_header(ws, headers)
 
@@ -980,6 +983,7 @@ def _build_item_requirement_sheet(wb, mr_rows):
     reserved_wo = _reserved_against_open_wo_map(item_codes)         # F
     incoming_wo = _projected_incoming_from_open_wo_map(item_codes)  # G
     safety = _safety_stock_map(item_codes)                          # K
+    origins = _origin_boms_map(mr_rows)                             # L
     # J "Inventory Rate" uses the same source as sheet 2 col G: the STOCK_WAREHOUSE
     # Bin valuation rate (get_stock_map), so the two sheets never disagree on rate.
     stock_map = get_stock_map(item_codes)
@@ -1001,6 +1005,7 @@ def _build_item_requirement_sheet(wb, mr_rows):
         # Inventory Rate = STOCK_WAREHOUSE Bin valuation rate (same as sheet 2 col G)
         ws.cell(r, 10, flt((stock_map.get(item) or frappe._dict()).get("valuation_rate")))
         ws.cell(r, 11, flt(safety.get(item)))
+        ws.cell(r, 12, ", ".join(origins.get((row.get("_pp"), item)) or []))
         r += 1
 
     # TOTAL row: SUMPRODUCT(Qty As Per BOM, Inventory Rate) at the foot of column D =
@@ -1011,6 +1016,7 @@ def _build_item_requirement_sheet(wb, mr_rows):
         4: "=SUMPRODUCT(D2:D{last},J2:J{last})".format(last=last),
     })
     _autosize(ws, headers)
+    ws.column_dimensions["L"].width = 40  # Origin BOMs can list several
 
 
 # --------------------------------------------------------------------------- #
@@ -1683,9 +1689,45 @@ def _build_chain(name):
     return chain
 
 
+def _origin_boms_map(mr_rows):
+    """{(plan, item_code): [bom, ...]} - for each Raw Materials row, the BOMs on
+    that same plan's Assembly Items that call for the item, i.e. where its Qty As
+    Per BOM comes from. A plan level's raw materials are exploded from its own
+    po_items' BOMs, so the match is per plan: direct BOM Item rows first, then -
+    for an item reached only through a nested BOM (exploded items) - the BOM
+    Explosion Item rows. Sorted BOM names; [] when nothing matches."""
+    items_by_plan = {}
+    for row in mr_rows:
+        items_by_plan.setdefault(row.get("_pp"), set()).add(row["item_code"])
+
+    out = {}
+    for plan, items in items_by_plan.items():
+        if not plan:
+            continue
+        boms = sorted({
+            b for b in frappe.get_all("Production Plan Item", filters={"parent": plan}, pluck="bom_no") if b
+        })
+        if not boms:
+            continue
+        found = {}
+        for child_doctype in ("BOM Item", "BOM Explosion Item"):
+            wanted = sorted(i for i in items if i not in found)
+            if not wanted:
+                break
+            for r in frappe.get_all(
+                child_doctype,
+                filters={"parent": ["in", boms], "parenttype": "BOM", "item_code": ["in", wanted]},
+                fields=["parent", "item_code"],
+            ):
+                found.setdefault(r.item_code, set()).add(r.parent)
+        for item, parents in found.items():
+            out[(plan, item)] = sorted(parents)
+    return out
+
+
 def _collect_mr_rows(chain):
     """Every Material Request Plan Item across the chain, tagged with its level
-    (L1..Ln)."""
+    (L1..Ln) and the plan it came from (_pp)."""
     rows = []
     for idx, pp in enumerate(chain):
         level = "L{0}".format(idx + 1)
@@ -1696,6 +1738,7 @@ def _collect_mr_rows(chain):
             order_by="idx asc",
         ):
             d["_level"] = level
+            d["_pp"] = pp
             rows.append(d)
     return rows
 

@@ -174,5 +174,20 @@
   "insert_after": "stock_received_but_not_billed",
   "translatable": 0,
   "description": "Expense (P&L) account credited when a Price Adjustment Debit Note reclassifies value out of Stock Received But Not Billed. A credit balance here represents a reduction in purchase cost from retrospective supplier price adjustments. Must belong to this Company."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Production Plan-custom_planning_source",
+  "dt": "Production Plan",
+  "fieldname": "custom_planning_source",
+  "label": "Planning Source",
+  "fieldtype": "Long Text",
+  "insert_after": "company",
+  "hidden": 1,
+  "read_only": 1,
+  "no_copy": 1,
+  "allow_on_submit": 1,
+  "translatable": 0,
+  "description": "JSON set by FGSRM / Weekly Planning Snapshot Create Prodn Plan: where the plan's demand came from (report filters + ticked rows, or the snapshot), so the MR Hierarchy Excel on the plan can rebuild the same unified planning workbook. See playground/playground/unified_planning_workbook.py."
  }
 ]

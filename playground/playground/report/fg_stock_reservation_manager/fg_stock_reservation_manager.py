@@ -989,7 +989,13 @@ def create_production_plan_from_suggested_prodn(filters=None, exclude_mode=None,
 	a plan that app's hierarchy/Excel features don't recognise."""
 	if not frappe.has_permission("Production Plan", "create"):
 		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
-	return _build_production_plan(_prodn_for(filters=filters, selection=selection), exclude_mode)
+	sel = parse_selection(selection)
+	source = {
+		"source": "FGSRM",
+		"filters": frappe.parse_json(filters) if filters else {},
+		"selection": {key: sorted(values) for key, values in sel.items()} if sel else None,
+	}
+	return _build_production_plan(_prodn_for(filters=filters, selection=selection), exclude_mode, source)
 
 
 @frappe.whitelist()
@@ -999,10 +1005,12 @@ def create_production_plan_from_snapshot(snapshot, exclude_mode=None):
 	same builder as the FGSRM report."""
 	if not frappe.has_permission("Production Plan", "create"):
 		frappe.throw(_("You are not permitted to create Production Plans."), frappe.PermissionError)
-	return _build_production_plan(_prodn_for(snapshot=snapshot), exclude_mode)
+	return _build_production_plan(
+		_prodn_for(snapshot=snapshot), exclude_mode, {"source": "WPS", "snapshot": snapshot}
+	)
 
 
-def _build_production_plan(prodn_by_item, exclude_mode=None):
+def _build_production_plan(prodn_by_item, exclude_mode=None, source=None):
 	"""Build a DRAFT Production Plan from {item_code: qty}: tag it for the frontec
 	subsystem, seed raw materials + the full nested chain, and return a summary.
 	Shared by create_production_plan_from_suggested_prodn (FGSRM) and
@@ -1042,6 +1050,11 @@ def _build_production_plan(prodn_by_item, exclude_mode=None):
 	# propagates it to every child, and trigger_get_item_for_mr needs it as the
 	# warehouses arg. Point it at the FG stores warehouse the report works in.
 	pp.for_warehouse = STOCK_WAREHOUSE
+	# Where the demand came from ({"source": "FGSRM", filters, selection} or
+	# {"source": "WPS", snapshot}), so the plan's MR Hierarchy Excel can rebuild
+	# the same unified workbook later (unified_planning_workbook.download_plan_workbook).
+	if source and pp.meta.has_field("custom_planning_source"):
+		pp.custom_planning_source = json.dumps(source, default=str)
 
 	excluded_items = {e["item_code"] for e in excluded}
 	for item, qty in prodn_by_item.items():

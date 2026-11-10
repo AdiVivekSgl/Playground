@@ -10,8 +10,10 @@ after building a Production Plan. It walks the whole planning story end to end, 
 one file, in one consistent format - and one sheet ("Approved for Purchase") is
 drop-in ready for the Purchase Authorization Sheet's "Populate from Excel".
 
-The Production Plan form keeps its own existing download (frontec's MR Hierarchy
-Excel) untouched - this workbook is the FGSRM/WPS-side artifact only.
+The Production Plan form's "MR Hierarchy Excel" button (frontec) also produces
+this workbook (download_plan_workbook, via override_whitelisted_methods in
+hooks.py), rebuilt from the plan's stored demand source, with frontec's own MR
+Hierarchy + Assembly Items sheets appended at the end.
 
 Sheets (the data sheets share one grammar: column A = Item Code, a grey/bold/
 centred header on row 1, Float qty / Currency value, a bold TOTAL row; redundant
@@ -86,6 +88,10 @@ Data sources by entry point:
   - From WPS:   `snapshot` (the Weekly Planning Snapshot name) drives sheets 1-3
     from the frozen lines incl. Committed Prodn and Buffer rows; the plan `name`
     drives sheets 3-5.
+  - From the Production Plan form: the root plan's custom_planning_source says
+    which of the above built it (FGSRM filters + ticked rows are re-run, so its
+    sheets 1-2 show demand as it stands now); a plan without one uses its own
+    root Assembly Items as the demand lines.
 
 Built with openpyxl (bundled with Frappe) and streamed via frappe.response.
 """
@@ -122,8 +128,13 @@ ACTION_ITEMS_SHEET = "Action Items"
 # frontec's parent-plan link that chains the nested Production Plans (used to walk
 # the plan chain for sheets 3-4).
 PARENT_FIELD = "custom_parent_production_plan"
-MAX_LEVELS = 5
+# Plans in a chain: the root + up to 10 child levels (frontec production_plan.MAX_LEVELS).
+MAX_LEVELS = 11
 _HEADER_FILL = "D3D3D3"
+# Root-plan field holding the demand source JSON (set by FGSRM / WPS Create Prodn Plan).
+SOURCE_FIELD = "custom_planning_source"
+# frontec's MR Hierarchy sheet builder, appended to the plan-download workbook.
+FROTEC_MR_SHEETS = "frontec.doc_event.production_plan.hierarchy_excel.add_mr_hierarchy_sheets"
 
 
 @frappe.whitelist()
@@ -152,15 +163,95 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None, s
             frappe.PermissionError,
         )
 
-    filters = frappe.parse_json(filters) if filters else {}
+    wb = _build_unified_workbook(plan, filters, snapshot, selection)
+    stem = str(plan).replace("/", "-") if plan else "Workbook_Only_{0}".format(now_datetime().strftime("%Y%m%d-%H%M"))
+    _stream_workbook(wb, "Unified_Planning_{0}.xlsx".format(stem))
 
+
+@frappe.whitelist()
+def download_plan_workbook(name):
+    """The Production Plan form's "MR Hierarchy Excel" download (frontec's button,
+    routed here by override_whitelisted_methods in hooks.py): the full unified
+    workbook for the plan's chain - the same file FGSRM / WPS produce - plus
+    frontec's own MR Hierarchy sheets at the end, so nothing the old download had
+    is lost.
+
+    Sheets 1-2 need the plan's demand, read from the root plan's
+    custom_planning_source (set when FGSRM / WPS built it):
+      FGSRM -> the report re-run with the stored filters + ticked rows (demand as
+               it stands now; the plan's own quantities drive sheets 3-5)
+      WPS   -> the stored Weekly Planning Snapshot
+      none  -> (plan made by hand, or before this field existed) the root plan's
+               own Assembly Items.
+    Works from any plan in the chain (child plans resolve to their root)."""
+    if not frappe.has_permission("Production Plan", "read", doc=name):
+        frappe.throw(
+            _("You are not permitted to read Production Plan {0}.").format(name),
+            frappe.PermissionError,
+        )
+    root = _build_chain(name)[0]
+    source = _planning_source(root)
+    if source.get("source") == "WPS" and source.get("snapshot"):
+        wb = _build_unified_workbook(root, snapshot=source["snapshot"])
+    elif source.get("source") == "FGSRM":
+        wb = _build_unified_workbook(root, filters=source.get("filters") or {}, selection=source.get("selection"))
+    else:
+        wb = _build_unified_workbook(root, from_plan=True)
+
+    add_mr_sheets = _frotec_mr_sheets()
+    if add_mr_sheets:
+        add_mr_sheets(wb, root, combined_title="MR Hierarchy", assembly_title="Assembly Items")
+
+    _stream_workbook(wb, "Unified_Planning_{0}.xlsx".format(str(root).replace("/", "-")))
+
+
+def _planning_source(plan):
+    """The root plan's stored demand source dict, or {} when absent/unreadable."""
+    if not frappe.db.has_column("Production Plan", SOURCE_FIELD):
+        return {}
+    raw = frappe.db.get_value("Production Plan", plan, SOURCE_FIELD)
+    if not raw:
+        return {}
+    try:
+        return frappe.parse_json(raw) or {}
+    except Exception:
+        return {}
+
+
+def _frotec_mr_sheets():
+    """frontec's add_mr_hierarchy_sheets, or None on a frontec build without it."""
+    try:
+        return frappe.get_attr(FROTEC_MR_SHEETS)
+    except Exception:
+        return None
+
+
+def _stream_workbook(wb, filename):
+    stream = BytesIO()
+    wb.save(stream)
+    frappe.response["filename"] = filename
+    frappe.response["filecontent"] = stream.getvalue()
+    frappe.response["type"] = "binary"
+
+
+def _build_unified_workbook(plan=None, filters=None, snapshot=None, selection=None, from_plan=False):
+    """The unified workbook as an openpyxl Workbook (see the module docstring).
+    Demand for sheets 1-2 comes from `snapshot` (WPS), else `filters` +
+    `selection` (FGSRM), else - with `from_plan` - the plan's own Assembly Items."""
     import openpyxl
+
+    filters = frappe.parse_json(filters) if filters else {}
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # drop the default empty sheet
 
     selection = None if snapshot else parse_selection(selection)
-    lines = _planning_lines(filters, snapshot, selection)
+    if from_plan and plan:
+        lines = _lines_from_plan(plan)
+        origin = "plan"
+    else:
+        lines = _planning_lines(filters, snapshot, selection)
+        origin = "wps" if snapshot else "fgsrm"
     chain = _build_chain(plan) if plan else []
     committed_by_item = _plan_committed_by_item(plan) if plan else {}
     # The nested-chain Material Request Plan Items - shared by the Item Requirement
@@ -168,7 +259,7 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None, s
     mr_rows = _collect_mr_rows(chain)
     actions = _action_items(plan, chain, lines, committed_by_item)
 
-    _build_cover_sheet(wb, plan, filters, snapshot, actions, selection)
+    _build_cover_sheet(wb, plan, filters, snapshot, actions, selection, origin)
     fg_total = _build_fg_status_sheet(wb, lines)
     prodn_total = _build_production_requirement_sheet(wb, lines)
     _build_consolidated_requirement_sheet(wb, lines, committed_by_item)
@@ -179,14 +270,7 @@ def download_unified_planning_workbook(plan=None, filters=None, snapshot=None, s
     _build_action_items_sheet(wb, actions)
     # Built last (it points at the other sheets' TOTAL rows), placed after Cover.
     _build_summary_sheet(wb, fg_total, prodn_total, purchase_total, lines)
-
-    stream = BytesIO()
-    wb.save(stream)
-
-    stem = str(plan).replace("/", "-") if plan else "Workbook_Only_{0}".format(now_datetime().strftime("%Y%m%d-%H%M"))
-    frappe.response["filename"] = "Unified_Planning_{0}.xlsx".format(stem)
-    frappe.response["filecontent"] = stream.getvalue()
-    frappe.response["type"] = "binary"
+    return wb
 
 
 # --------------------------------------------------------------------------- #
@@ -209,7 +293,7 @@ _FILTER_LABELS = {
 }
 
 
-def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
+def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None, origin=None):
     """First sheet: the report title (which differs by origin), a hyperlinked
     reference to the origin document and the Production Plan, and a generated-on
     timestamp.
@@ -218,6 +302,9 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
                       Weekly Planning Snapshot (with its snapshot date).
       - From FGSRM -> "Shortage Against 4 Week Production", origin = the FG Stock
                       Reservation Manager report view, with its filters listed.
+      - From plan  -> (`origin` "plan": a plan with no stored source, downloaded
+                      from its own form) "Production Plan Workbook", demand = the
+                      plan's Assembly Items.
 
     Origin Document and Production Plan cells hyperlink to their desk forms (the
     FGSRM origin links to the report); links resolve against the site's own URL.
@@ -228,11 +315,13 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
 
     ws = wb.create_sheet("Cover")
     is_wps = bool(snapshot)
-    title = (
-        _("Urgent Shortage Against Weekly Commitment")
-        if is_wps
-        else _("Shortage Against 4 Week Production")
-    )
+    is_plan = origin == "plan"
+    if is_plan:
+        title = _("Production Plan Workbook")
+    elif is_wps:
+        title = _("Urgent Shortage Against Weekly Commitment")
+    else:
+        title = _("Shortage Against 4 Week Production")
 
     # Title band, merged across the key/value columns.
     ws.merge_cells("A1:B1")
@@ -262,7 +351,9 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
             vc.font = link_font
 
     r = 3
-    if is_wps:
+    if is_plan:
+        _kv(r, _("Source"), _("Production Plan (its own Assembly Items)")); r += 1
+    elif is_wps:
         _kv(r, _("Source"), _("Weekly Planning Snapshot")); r += 1
         _kv(r, _("Origin Document"), snapshot, get_url_to_form("Weekly Planning Snapshot", snapshot)); r += 1
         snap_date = frappe.db.get_value("Weekly Planning Snapshot", snapshot, "snapshot_date")
@@ -285,7 +376,7 @@ def _build_cover_sheet(wb, plan, filters, snapshot, actions, selection=None):
     _kv(r, _("Prepared By"), get_fullname(frappe.session.user)); r += 1
 
     # FGSRM filters that produced the view.
-    if not is_wps:
+    if not is_wps and not is_plan:
         r += 1
         ws.cell(r, 1, _("Filters Applied")).font = label_font
         r += 1
@@ -573,6 +664,83 @@ def _lines_from_fgsrm(filters, selection=None):
                 "material_status": r.get("material_status"),
                 "sales_status": r.get("sales_status"),
                 "source": r.get("source") or "",
+                "is_buffer": 0,
+            }
+        )
+    return lines
+
+
+def _lines_from_plan(plan):
+    """Per-line model from the plan's own root Assembly Items, for a plan with no
+    stored demand source (made by hand, or before custom_planning_source existed).
+    Suggested = Committed = the row's Planned Qty. When a row links a Sales Order
+    item, Customer / Dispatch Priority (SO delivery date) / Pending Qty / Pending
+    Value / statuses come from it; otherwise those stay blank."""
+    root = _build_chain(plan)[0]
+    rows = frappe.get_all(
+        "Production Plan Item",
+        filters={"parent": root},
+        fields=["item_code", "planned_qty", "sales_order", "sales_order_item"],
+        order_by="idx asc",
+    )
+    if not rows:
+        return []
+
+    item_codes = sorted({r.item_code for r in rows})
+    stock_map = get_stock_map(item_codes)
+    names = {
+        r.name: r.item_name
+        for r in frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "item_name"])
+    }
+    so_items = sorted({r.sales_order_item for r in rows if r.sales_order_item})
+    so_item_map = {}
+    if so_items:
+        so_item_map = {
+            r.name: r
+            for r in frappe.get_all(
+                "Sales Order Item",
+                filters={"name": ["in", so_items]},
+                fields=["name", "qty", "delivered_qty", "base_net_rate"],
+            )
+        }
+    sos = sorted({r.sales_order for r in rows if r.sales_order})
+    so_header = {}
+    if sos:
+        so_header = {
+            r.name: r
+            for r in frappe.get_all(
+                "Sales Order", filters={"name": ["in", sos]}, fields=["name", "customer", "delivery_date"]
+            )
+        }
+    material_status, sales_status = _so_status_maps(sos)
+
+    lines = []
+    for r in rows:
+        stock = stock_map.get(r.item_code) or frappe._dict()
+        soi = so_item_map.get(r.sales_order_item) or frappe._dict()
+        so = so_header.get(r.sales_order) or frappe._dict()
+        pending = max(0.0, flt(soi.get("qty")) - flt(soi.get("delivered_qty"))) if soi else 0.0
+        planned = flt(r.planned_qty)
+        lines.append(
+            {
+                "item_code": r.item_code,
+                "item_name": names.get(r.item_code),
+                "customer": so.get("customer"),
+                "sales_order": r.sales_order,
+                "so_date": so.get("delivery_date"),
+                "pending_qty": pending,
+                "reserved_qty": 0.0,
+                "item_free_stock": flt(stock.get("actual_qty")) - flt(stock.get("reserved_qty")),
+                "suggested_prodn": planned,
+                "committed_prodn": planned,
+                "valuation_rate": flt(stock.get("valuation_rate")),
+                "pending_value": pending * flt(soi.get("base_net_rate")),
+                "short_to_complete": pending,
+                "total_reserved_qty": None,
+                "reserved_by_customer": "",
+                "material_status": material_status.get(r.sales_order),
+                "sales_status": sales_status.get(r.sales_order),
+                "source": "" if r.sales_order else _("Plan"),
                 "is_buffer": 0,
             }
         )

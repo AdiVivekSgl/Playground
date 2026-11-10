@@ -116,6 +116,15 @@ fixtures = [
 			],
 		],
 	},
+	# Production Plan demand source (FGSRM filters / snapshot) for rebuilding the
+	# unified planning workbook from the plan's MR Hierarchy Excel button.
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			["dt", "=", "Production Plan"],
+			["fieldname", "=", "custom_planning_source"],
+		],
+	},
 	# Audit trail for the Purchase Order bulk-close action.
 	{
 		"doctype": "Custom Field",
@@ -175,6 +184,16 @@ fixtures = [
 		],
 	},
 ]
+
+# The Production Plan form's "MR Hierarchy Excel" button (frontec) downloads the
+# full unified planning workbook instead - the same file FGSRM / Weekly Planning
+# Snapshot produce, rebuilt from the plan's stored demand source, with frontec's
+# own MR Hierarchy sheets kept at the end. See unified_planning_workbook.py.
+override_whitelisted_methods = {
+	"frontec.doc_event.production_plan.hierarchy_excel.download_mr_hierarchy_excel": (
+		"playground.playground.unified_planning_workbook.download_plan_workbook"
+	),
+}
 
 # First doc_events / scheduler_events in this app - drives Sales Order Material
 # Status (see playground/playground/sales_order_hooks.py).
